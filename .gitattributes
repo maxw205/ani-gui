@@ -1,0 +1,2 @@
+# the bridge runs under Git Bash; CRLF line endings would break it
+bridge/* text eol=lf
