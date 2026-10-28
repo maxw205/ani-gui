@@ -2,6 +2,8 @@
 
 A desktop window for [ani-cli](https://github.com/pystardust/ani-cli). Search, pick an episode, and it plays in mpv.
 
+There are two versions: the original Python/tkinter app (this folder) and a Tauri port in [`tauri-app/`](tauri-app/README.md) with an HTML/CSS interface.
+
 ## Run it
 
 Double-click `AnimeCLI.bat`, or:
