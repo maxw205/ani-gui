@@ -1,0 +1,29 @@
+#!/bin/sh
+# Stand-in player for the in-page player mode (ANI_CLI_PLAYER=anigui-webmpv). ani-cli
+# runs it exactly like mpv, since the name contains "mpv", so it gets the referrer and
+# subtitles too. It hands the stream details to the app through files in $ANIGUI_IPC,
+# then waits until the app says the episode has finished, so ani-cli's after-playback
+# menu comes at the right time.
+dir="$ANIGUI_IPC"
+[ -d "$dir" ] || exit 1
+url=
+referrer=
+subs=
+title=
+for arg in "$@"; do
+    case "$arg" in
+        --referrer=*) referrer="${arg#--referrer=}" ;;
+        --sub-file=*) subs="${arg#--sub-file=}" ;;
+        --force-media-title=*) title="${arg#--force-media-title=}" ;;
+        --*) ;;
+        *) url="$arg" ;;
+    esac
+done
+
+printf '%s\n%s\n%s\n%s\n' "$url" "$referrer" "$subs" "$title" >"$dir/stream.tmp" && mv -f "$dir/stream.tmp" "$dir/stream"
+
+# the app removes the folder when it stops this session
+while [ -d "$dir" ] && [ ! -f "$dir/player-done" ]; do
+    sleep 0.5
+done
+rm -f "$dir/player-done"

@@ -1,0 +1,22 @@
+{
+  "name": "animecli-electron",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Desktop app for watching anime through ani-cli (Electron + React)",
+  "main": "electron/main.cjs",
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "build": "vite build",
+    "start": "vite build && electron ."
+  },
+  "dependencies": {
+    "hls.js": "^1.7.4",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.7.0",
+    "electron": "^33.4.11",
+    "vite": "^5.4.21"
+  }
+}
