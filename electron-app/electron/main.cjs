@@ -11,6 +11,12 @@ protocol.registerSchemesAsPrivileged([
   { scheme: "anistream", privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true, corsEnabled: true } },
 ]);
 
+// Chromium leaves WebGPU (the upscaler) off on Linux unless asked; it falls back to plain video if it still fails
+if (process.platform === "linux") {
+  app.commandLine.appendSwitch("enable-unsafe-webgpu");
+  app.commandLine.appendSwitch("enable-features", "Vulkan");
+}
+
 let win = null;
 let anicli = null;
 const streams = new StreamProxy();

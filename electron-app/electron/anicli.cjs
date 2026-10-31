@@ -14,9 +14,16 @@ const readline = require("node:readline");
 const { spawn, execFileSync } = require("node:child_process");
 
 const HOME = os.homedir();
+const WINDOWS = process.platform === "win32";
 
-/** Git Bash, which ani-cli needs on Windows (never WSL's bash.exe). */
-function findBash() {
+/** The POSIX shell ani-cli runs in: the system's sh, or Git Bash on Windows. */
+function findShell() {
+  if (!WINDOWS) return fs.existsSync("/bin/sh") ? "/bin/sh" : null;
+  return findGitBash();
+}
+
+/** Git Bash (never WSL's bash.exe). */
+function findGitBash() {
   const candidates = [path.join(HOME, "scoop", "apps", "git", "current", "bin", "bash.exe")];
   for (const v of ["ProgramFiles", "ProgramW6432", "ProgramFiles(x86)"]) {
     if (process.env[v]) candidates.push(path.join(process.env[v], "Git", "bin", "bash.exe"));
@@ -37,14 +44,19 @@ function registryPath(key) {
   }
 }
 
-/** This process's PATH plus entries added since it started (scoop installs add to it), bridge first. */
+/**
+ * Bridge first, then this process's PATH. On Windows also the registry's, for entries added since
+ * the app started (scoop installs add to it).
+ */
 function buildPath(bridgeDir) {
-  return [
-    bridgeDir,
-    process.env.PATH,
-    registryPath("HKCU\\Environment"),
-    registryPath("HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment"),
-  ].filter(Boolean).join(";");
+  const parts = [bridgeDir, process.env.PATH];
+  if (WINDOWS) {
+    parts.push(
+      registryPath("HKCU\\Environment"),
+      registryPath("HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment"),
+    );
+  }
+  return parts.filter(Boolean).join(path.delimiter);
 }
 
 /** The environment for ani-cli: ours, minus the Windows "Path" spelling that would shadow PATH. */
@@ -66,14 +78,16 @@ function aniCliEnv(pathVar, ipcDir) {
 
 /** One running ani-cli process. */
 class Session {
-  constructor({ id, args, bash, pathVar, send, onStream }) {
+  constructor({ id, args, shell, pathVar, send, onStream }) {
     this.id = id;
     this.killed = false;
     this.ipc = fs.mkdtempSync(path.join(os.tmpdir(), `anigui-${id}-`));
-    this.child = spawn(bash, ["-c", 'exec ani-cli "$@" 2>&1', "ani-cli", ...args], {
+    this.child = spawn(shell, ["-c", 'exec ani-cli "$@" 2>&1', "ani-cli", ...args], {
       env: aniCliEnv(pathVar, this.ipc),
       stdio: ["ignore", "pipe", "ignore"],
       windowsHide: true,
+      // its own process group elsewhere, so stop() can end it with everything it started
+      detached: !WINDOWS,
     });
 
     readline.createInterface({ input: this.child.stdout }).on("line", (line) => {
@@ -121,9 +135,10 @@ class Session {
   stop() {
     this.killed = true;
     clearInterval(this.poll);
-    if (this.child.exitCode === null) {
+    if (this.child.exitCode === null && this.child.pid) {
       try {
-        execFileSync("taskkill", ["/T", "/F", "/PID", String(this.child.pid)], { windowsHide: true, stdio: "ignore" });
+        if (WINDOWS) execFileSync("taskkill", ["/T", "/F", "/PID", String(this.child.pid)], { windowsHide: true, stdio: "ignore" });
+        else process.kill(-this.child.pid, "SIGTERM");
       } catch {
         // already exited
       }
@@ -143,6 +158,10 @@ function takeFile(file) {
   }
 }
 
+const NO_SHELL = WINDOWS
+  ? "Git Bash was not found, so ani-cli can't run. Install Git for Windows (or `scoop install git`)."
+  : "/bin/sh was not found, so ani-cli can't run.";
+
 class AniCli {
   /**
    * @param send  sends an event to the window: (channel, payload)
@@ -153,12 +172,14 @@ class AniCli {
     this.send = send;
     this.streams = streams;
     this.session = null;
-    this.bash = findBash();
+    this.shell = findShell();
     const bridgeDir = path.join(dataDir, "bridge");
     fs.mkdirSync(bridgeDir, { recursive: true });
-    for (const name of ["anigui-menu", "anigui-webmpv"]) {
+    for (const name of ["anigui-menu", "anigui-webmpv", "rofi"]) {
       const source = fs.readFileSync(path.join(__dirname, "bridge", name), "utf8");
-      fs.writeFileSync(path.join(bridgeDir, name), source.replace(/\r/g, ""));
+      const file = path.join(bridgeDir, name);
+      fs.writeFileSync(file, source.replace(/\r/g, ""));
+      fs.chmodSync(file, 0o755); // ani-cli only finds executables on PATH
     }
     this.pathVar = buildPath(bridgeDir);
   }
@@ -166,11 +187,11 @@ class AniCli {
   /** Starts `ani-cli <args>`, replacing any running session. `id` comes from the page. */
   start(id, args) {
     this.stop();
-    if (!this.bash) throw new Error("Git Bash was not found, so ani-cli can't run. Install Git for Windows (or `scoop install git`).");
+    if (!this.shell) throw new Error(NO_SHELL);
     this.session = new Session({
       id,
       args,
-      bash: this.bash,
+      shell: this.shell,
       pathVar: this.pathVar,
       send: this.send,
       onStream: (session, details) => this.onStream(session, details),
@@ -211,7 +232,8 @@ class AniCli {
 
   /** ani-cli's watch history as [{title, episode}], oldest first. */
   history() {
-    const dir = process.env.ANI_CLI_HIST_DIR || path.join(HOME, ".local", "state", "ani-cli");
+    const state = process.env.XDG_STATE_HOME || path.join(HOME, ".local", "state");
+    const dir = process.env.ANI_CLI_HIST_DIR || path.join(state, "ani-cli");
     try {
       return fs.readFileSync(path.join(dir, "ani-hsts"), "utf8").split(/\r?\n/)
         .map((line) => line.split("\t"))
@@ -223,7 +245,7 @@ class AniCli {
   }
 
   environment() {
-    return { bashFound: Boolean(this.bash) };
+    return { shellFound: Boolean(this.shell), noShell: NO_SHELL };
   }
 }
 

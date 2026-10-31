@@ -10,7 +10,10 @@ npm start        # builds the interface, then opens the app
 npm run dev      # development: hot reload for the React side
 ```
 
-Needs ani-cli (and its Git Bash) installed, e.g. with scoop. mpv isn't used.
+Needs Node.js and [ani-cli](https://github.com/pystardust/ani-cli) on PATH. mpv and fzf aren't used.
+
+- **Windows**: ani-cli and Git for Windows, e.g. `scoop install git ani-cli`. ani-cli runs in Git Bash.
+- **Linux / macOS**: ani-cli (from your package manager or its install script) with curl, sed and grep. ani-cli runs in `/bin/sh`. On Linux the upscaler needs WebGPU through Vulkan; if the GPU driver doesn't offer it, the plain video plays.
 
 ## Using it
 
@@ -26,12 +29,12 @@ Needs ani-cli (and its Git Bash) installed, e.g. with scoop. mpv isn't used.
 | `electron/anicli.cjs` | Runs ani-cli and relays its menus, output and streams to the page |
 | `electron/stream.cjs` | The `anistream://` protocol: fetches the stream with the referrer it needs |
 | `electron/preload.cjs` | The only API the page has (`window.anicli`) |
-| `electron/bridge/` | Scripts ani-cli runs: its menu (`anigui-menu`) and its "player" (`anigui-webmpv`) |
+| `electron/bridge/` | Scripts ani-cli runs: its menu (`anigui-menu`), its "player" (`anigui-webmpv`) and a `rofi` stand-in (below) |
 | `src/store.js` | App state and the ani-cli logic (what to answer, what to show) |
 | `src/components/` | The React UI; `Player.jsx` is the video and its controls |
 | `src/anilist.js` | Cover art and show details from AniList |
 
-**ani-cli does the finding.** It's run with `ANI_CLI_MENU=anigui-menu`: whenever it would show a menu, that script writes the prompt and options to a temp folder and waits for the page's answer. Its player is `anigui-webmpv`, a stand-in that writes the stream URL, referrer, subtitles and title to the same folder instead of playing anything. (The name has "mpv" in it only because ani-cli passes the referrer and subtitles to players whose name contains "mpv".) Nothing is scraped by the app, so updating ani-cli keeps it working.
+**ani-cli does the finding.** It's run with `ANI_CLI_MENU=anigui-menu`: whenever it would show a menu, that script writes the prompt and options to a temp folder and waits for the page's answer. Its player is `anigui-webmpv`, a stand-in that writes the stream URL, referrer, subtitles and title to the same folder instead of playing anything. (The name has "mpv" in it only because ani-cli passes the referrer and subtitles to players whose name contains "mpv".) Nothing is scraped by the app, so updating ani-cli keeps it working. When ani-cli isn't started from a terminal it switches to rofi or dmenu if either is installed, ignoring `ANI_CLI_MENU`; the bridge's `rofi` comes first on PATH, so ani-cli picks it and the menus still reach the page.
 
 **The page plays it.** The stream hosts only answer requests that carry the right referrer, which a page can't set. So the page asks for `anistream://proxy/?u=<url>`; the main process fetches it with the referrer and passes it back, rewriting HLS playlists so their segments and subtitles go through the proxy too. Only hosts ani-cli handed over are fetched. hls.js plays the result. Nothing is re-encoded, so quality is the original, playback starts as soon as ani-cli has the link, and you can seek anywhere straight away.
 

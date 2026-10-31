@@ -436,5 +436,5 @@ export function answerMenu(choice) {
 
 loadHistory();
 window.anicli.environment().then((env) => {
-  if (!env.bashFound) setStatus("Git Bash was not found, so ani-cli can't run. Install Git for Windows.", true);
+  if (!env.shellFound) setStatus(env.noShell, true);
 });

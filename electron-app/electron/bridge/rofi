@@ -1,0 +1,11 @@
+#!/bin/sh
+# Stand-in for rofi. When ani-cli isn't run from a terminal (as here) it switches
+# to rofi or dmenu if either is installed, ignoring ANI_CLI_MENU. This script is
+# first on PATH, so ani-cli picks "rofi" and its menus still go to the window.
+# ani-cli calls it as: rofi -sort -dmenu -i -p PROMPT [flags]
+prompt=""
+while [ $# -gt 0 ]; do
+    [ "$1" = "-p" ] && [ $# -gt 1 ] && prompt="$2" && shift
+    shift
+done
+exec anigui-menu "$prompt"
