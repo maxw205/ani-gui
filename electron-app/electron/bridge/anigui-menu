@@ -1,0 +1,16 @@
+#!/bin/sh
+# Menu program for ani-cli (set through ANI_CLI_MENU). Instead of drawing a
+# menu, it hands the prompt and the options to the AnimeCLI window through
+# files in $ANIGUI_IPC, then waits for the window to write back the choice.
+dir="$ANIGUI_IPC"
+[ -d "$dir" ] || exit 1
+
+{ printf '%s\n' "$1"; cat; } >"$dir/request.tmp" && mv -f "$dir/request.tmp" "$dir/request"
+
+while [ ! -f "$dir/response" ]; do
+    # the window removes the folder when it stops this session
+    [ -d "$dir" ] || exit 1
+    sleep 0.1
+done
+cat "$dir/response"
+rm -f "$dir/response"

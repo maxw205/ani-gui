@@ -2,6 +2,8 @@
 
 A desktop window for [ani-cli](https://github.com/pystardust/ani-cli). Search, pick an episode, and it plays in mpv.
 
+There are two versions: the original Python/tkinter app (this folder) and an Electron + React app in [`electron-app/`](electron-app/README.md), which plays episodes right in the window (no mpv) and can upscale them with Anime4K.
+
 ## Run it
 
 Double-click `AnimeCLI.bat`, or:
