@@ -15,6 +15,16 @@ Needs Node.js and [ani-cli](https://github.com/pystardust/ani-cli) on PATH. mpv 
 - **Windows**: ani-cli and Git for Windows, e.g. `scoop install git ani-cli`. ani-cli runs in Git Bash.
 - **Linux / macOS**: ani-cli (from your package manager or its install script) with curl, sed and grep. ani-cli runs in `/bin/sh`. On Linux the upscaler needs WebGPU through Vulkan; if the GPU driver doesn't offer it, the plain video plays.
 
+## Build an installer
+
+```
+npm run dist
+```
+
+builds the interface and packs it with [electron-builder](https://www.electron.build) into `release/AnimeCLI-Setup-<version>.exe` (about 90 MB, since Electron brings its own Chromium), to share or attach to a release. The version comes from `package.json`. On Linux the same command makes `release/AnimeCLI-<version>.AppImage` (it has to be built on Linux, or in WSL). The installed app still needs ani-cli, and Git for Windows on Windows, as above.
+
+The app isn't code-signed, so Windows shows "Windows protected your PC" the first time; **More info → Run anyway** starts it. It has Electron's default icon until one is added. Installed or run with `npm start`, it keeps its settings in the same folder (`%APPDATA%nimecli-electron` on Windows).
+
 ## Using it
 
 - **Search**, pick a show, click an episode. **History** lists what you've watched; click one to jump to the next episode.
@@ -68,4 +78,3 @@ Nothing shows when the show didn't match on AniList (it then has no cover art ei
 ## Not done yet
 
 - ArtCNN (the GLSL shaders are written for mpv/libplacebo and would need porting to WebGPU).
-- Packaging into an installer (e.g. electron-builder).

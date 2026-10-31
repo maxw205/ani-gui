@@ -3,21 +3,49 @@
   "private": true,
   "version": "0.1.0",
   "description": "Desktop app for watching anime through ani-cli (Electron + React)",
+  "author": "maxw205",
   "main": "electron/main.cjs",
   "scripts": {
     "dev": "node scripts/dev.mjs",
     "build": "vite build",
-    "start": "vite build && electron ."
-  },
-  "dependencies": {
-    "anime4k-webgpu": "^1.0.0",
-    "hls.js": "^1.7.4",
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "start": "vite build && electron .",
+    "dist": "vite build && electron-builder"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.7.0",
+    "anime4k-webgpu": "^1.0.0",
     "electron": "^33.4.11",
+    "electron-builder": "^26.18.0",
+    "hls.js": "^1.7.4",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
     "vite": "^5.4.21"
+  },
+  "build": {
+    "appId": "com.maxw205.animecli",
+    "productName": "AnimeCLI",
+    "files": [
+      "dist/**",
+      "electron/**",
+      "package.json"
+    ],
+    "directories": {
+      "output": "release"
+    },
+    "win": {
+      "target": "nsis",
+      "signAndEditExecutable": false
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "artifactName": "AnimeCLI-Setup-${version}.${ext}"
+    },
+    "linux": {
+      "target": "AppImage",
+      "category": "Video",
+      "artifactName": "AnimeCLI-${version}.${ext}"
+    }
   }
 }

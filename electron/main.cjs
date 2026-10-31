@@ -6,6 +6,10 @@ const { app, BrowserWindow, ipcMain, protocol } = require("electron");
 const { AniCli } = require("./anicli.cjs");
 const { StreamProxy } = require("./stream.cjs");
 
+// Settings, captions and the AniList cache live in this folder. Electron would name it after the
+// app ("AnimeCLI" once installed); keep the one it's always had, for npm start and installs alike.
+app.setPath("userData", path.join(app.getPath("appData"), "animecli-electron"));
+
 // must happen before the app is ready: anistream:// behaves like https for fetch and media
 protocol.registerSchemesAsPrivileged([
   { scheme: "anistream", privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true, corsEnabled: true } },
