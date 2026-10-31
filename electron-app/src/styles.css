@@ -157,10 +157,12 @@ select option, select optgroup { background: var(--panel); color: var(--text); }
 .ep.current:hover { background: var(--accent-hover); }
 
 /* player: a plain <video> with the controls laid over it */
-.player-area { flex: none; padding: 12px 12px 0; }
+/* the player scrolls with the episodes under it: as wide as the panel, but never taller than
+   what fits on screen with the episode bar still showing below it */
+.player-area { margin-bottom: 14px; }
 .player-frame {
   position: relative;
-  width: min(100%, calc(56vh * 16 / 9));
+  width: min(100%, calc((90vh - 240px) * 16 / 9));
   aspect-ratio: 16 / 9;
   margin: 0 auto;
   border-radius: 8px;

@@ -11,8 +11,8 @@ export default function Detail() {
   return (
     <section className={`panel detail ${playing ? "playing" : ""}`}
       style={media?.coverImage?.color ? { "--show-color": media.coverImage.color } : undefined}>
-      {playing && <Player />}
       <div className="detail-scroll">
+        {playing && <Player />}
         {!playing && media?.bannerImage && <div className="banner" style={{ backgroundImage: `url(${JSON.stringify(media.bannerImage)})` }} />}
         {!playing && (
           <div className="detail-head">
