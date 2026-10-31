@@ -1,7 +1,4 @@
 __pycache__/
 *.pyc
-tauri-app/node_modules/
-tauri-app/src-tauri/target/
-tauri-app/src-tauri/gen/
 electron-app/node_modules/
 electron-app/dist/
