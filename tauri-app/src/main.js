@@ -28,6 +28,10 @@ const el = {
   searchForm: $("search-form"), search: $("search"), historyBtn: $("history-btn"),
   modeButtons: [...document.querySelectorAll("[data-mode]")], quality: $("quality"),
   upscaler: $("upscaler"), upscaleHint: $("upscale-hint"), fullscreen: $("fullscreen"),
+  playerArea: $("player-area"), videoSlot: $("video-slot"), detailScroll: $("detail-scroll"), fsBtn: $("fs-btn"),
+  videoControls: $("video-controls"), vcPlay: $("vc-play"), vcBack: $("vc-back"), vcFwd: $("vc-fwd"), vcTime: $("vc-time"),
+  vcSeek: $("vc-seek"), vcBuffer: $("vc-buffer"), vcProgress: $("vc-progress"),
+  vcMute: $("vc-mute"), vcVolume: $("vc-volume"), vcSpeed: $("vc-speed"), vcSubs: $("vc-subs"),
   listLabel: $("list-label"), list: $("list"),
   title: $("title"), info: $("info"), page: $("page"), episodes: $("episodes"),
   detail: $("detail"), banner: $("banner"), cover: $("cover"), altTitle: $("alt-title"),
@@ -55,6 +59,10 @@ const state = {
   autoTitle: null,
   continueAfter: null,
   autoEpisode: null,
+  // the embedded player: loading (episode clicked, no mpv yet), open (mpv connected), theater (fullscreen)
+  playerLoading: false,
+  playerOpen: false,
+  theater: false,
 };
 let nextSessionId = 1;
 
@@ -184,7 +192,152 @@ function clearDetails() {
   detailsFor = null;
   for (const node of [el.banner, el.cover, el.altTitle, el.facts, el.genres, el.airing, el.descWrap, el.credit]) node.hidden = true;
   el.detail.style.removeProperty("--show-color");
-  el.detail.scrollTop = 0;
+  el.detailScroll.scrollTop = 0;
+}
+
+// ---------- embedded player ----------
+
+let lastVideoRect = "";
+// while the window is being resized the video stays hidden (the backend hides it on the
+// first resize event); it comes back this long after the size stops changing
+const RESIZE_SETTLE_MS = 120;
+let resizeHoldUntil = 0;
+let resizeTimer = 0;
+
+function onWindowResize() {
+  resizeHoldUntil = Date.now() + RESIZE_SETTLE_MS;
+  lastVideoRect = ""; // the backend hid it without telling us
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(() => syncVideo(true), RESIZE_SETTLE_MS + 10);
+}
+
+/** Keeps the native window mpv draws into exactly over the video box (or hidden). */
+function syncVideo(force = false) {
+  const box = el.videoSlot.getBoundingClientRect();
+  const scale = window.devicePixelRatio || 1;
+  const rect = {
+    x: Math.round(box.left * scale),
+    y: Math.round(box.top * scale),
+    width: Math.round(box.width * scale),
+    height: Math.round(box.height * scale),
+    // a native window always draws above the page, so hide it while a dialog is up
+    visible: state.playerOpen && !el.playerArea.hidden && !el.menuDialog.open && box.width > 0 && Date.now() >= resizeHoldUntil,
+  };
+  const key = JSON.stringify(rect);
+  if (key === lastVideoRect && !force) return;
+  lastVideoRect = key;
+  invoke("set_video_rect", rect).catch((err) => log(`[video] ${err}`));
+}
+
+function updatePlayerView() {
+  const show = state.playerOpen || state.playerLoading;
+  el.playerArea.hidden = !show;
+  el.detail.classList.toggle("playing", show);
+  if (!state.playerOpen && state.theater) setTheater(false);
+  renderControls();
+  requestAnimationFrame(() => syncVideo(true));
+}
+
+// ---------- control bar ----------
+
+// mpv's state as reported by the backend (pause, time-pos, duration, volume, mute, ...)
+let playerProps = {};
+let seekDragging = false;
+
+function formatTime(seconds) {
+  const t = Number.isFinite(seconds) && seconds > 0 ? Math.floor(seconds) : 0;
+  const h = Math.floor(t / 3600);
+  const m = Math.floor((t % 3600) / 60);
+  const s = String(t % 60).padStart(2, "0");
+  return h ? `${h}:${String(m).padStart(2, "0")}:${s}` : `${m}:${s}`;
+}
+
+function playerCommand(...command) {
+  return invoke("player_command", { command }).catch((err) => log(`[player] ${err}`));
+}
+
+function setPlayerProperty(name, value) {
+  return playerCommand("set_property", name, value);
+}
+
+/** Redraws the control bar from mpv's reported state. */
+function renderControls() {
+  const p = playerProps;
+  const duration = p.duration || 0;
+  const position = seekDragging ? (Number(el.vcSeek.value) / 1000) * duration : p["time-pos"] || 0;
+
+  el.vcPlay.classList.toggle("paused", Boolean(p.pause));
+  el.vcPlay.title = p.pause ? "Play (space)" : "Pause (space)";
+  el.vcPlay.setAttribute("aria-label", p.pause ? "Play" : "Pause");
+
+  el.vcTime.textContent = `${formatTime(position)} / ${formatTime(duration)}`;
+  if (!seekDragging) el.vcSeek.value = duration ? Math.round((position / duration) * 1000) : 0;
+  el.vcProgress.style.width = duration ? `${Math.min(100, (position / duration) * 100)}%` : "0";
+  const cached = p["demuxer-cache-time"];
+  el.vcBuffer.style.width = duration && cached ? `${Math.min(100, (cached / duration) * 100)}%` : "0";
+
+  const muted = Boolean(p.mute) || p.volume === 0;
+  el.vcMute.classList.toggle("muted", muted);
+  el.vcMute.title = muted ? "Unmute (m)" : "Mute (m)";
+  if (document.activeElement !== el.vcVolume && typeof p.volume === "number") el.vcVolume.value = Math.round(Math.min(100, p.volume));
+  el.vcVolume.style.setProperty("--vol", `${muted ? 0 : el.vcVolume.value}%`);
+
+  el.vcSubs.setAttribute("aria-pressed", String(p["sub-visibility"] !== false));
+  if (typeof p.speed === "number" && [...el.vcSpeed.options].some((o) => Number(o.value) === p.speed)) el.vcSpeed.value = String(p.speed);
+
+  for (const control of el.videoControls.querySelectorAll("button, input, select")) control.disabled = !state.playerOpen;
+}
+
+function togglePause() {
+  setPlayerProperty("pause", !playerProps.pause);
+}
+
+function seekBy(seconds) {
+  // plain relative seeks snap to keyframes, which are ~10 s apart on these streams
+  playerCommand("seek", seconds, "relative+exact");
+}
+
+function changeVolume(delta) {
+  const volume = Math.max(0, Math.min(100, Math.round((playerProps.volume ?? 100) + delta)));
+  setPlayerProperty("volume", volume);
+  if (playerProps.mute && delta > 0) setPlayerProperty("mute", false);
+}
+
+function toggleMute() {
+  setPlayerProperty("mute", !playerProps.mute);
+}
+
+function toggleSubs() {
+  setPlayerProperty("sub-visibility", playerProps["sub-visibility"] === false);
+}
+
+/** mpv's built-in on-screen controller: hidden while the bar is showing, back in fullscreen. */
+function setOscVisible(on) {
+  playerCommand("script-message", "osc-visibility", on ? "auto" : "never", "no-osd");
+}
+
+/** Mirrors mpv's fullscreen property: the whole app goes fullscreen with only the video. */
+function setTheater(on) {
+  if (state.theater === on) return;
+  state.theater = on;
+  document.body.classList.toggle("theater", on);
+  invoke("set_window_fullscreen", { on }).catch((err) => log(`[fullscreen] ${err}`));
+  if (state.playerOpen) setOscVisible(on);
+  // the layout changes again once the window has resized
+  requestAnimationFrame(() => syncVideo(true));
+  setTimeout(() => syncVideo(true), 300);
+}
+
+/** Asks mpv to change fullscreen; it answers with an ani-player-fullscreen event. */
+function toggleFullscreen(on = !state.theater) {
+  if (state.playerOpen) invoke("set_player_fullscreen", { on });
+  else if (!on) setTheater(false);
+}
+
+function closePlayer() {
+  state.playerLoading = false;
+  state.playerOpen = false;
+  updatePlayerView();
 }
 
 async function loadDetails(title) {
@@ -300,6 +453,7 @@ function updateControls() {
   el.next.disabled = !(i >= 0 && i < state.episodes.length - 1);
   el.replay.disabled = i < 0;
   el.stop.disabled = !state.session;
+  el.fsBtn.disabled = !state.playerOpen;
 }
 
 async function loadHistory() {
@@ -359,7 +513,7 @@ function onOutput(line) {
   if (line.startsWith("Checking dependencies")) {
     setStatus("Starting ani-cli…");
   } else if (line.includes("links fetched")) {
-    setStatus("Opening mpv…  (close the player when you're done)");
+    setStatus("Starting playback…");
     if (state.currentEp) el.now.textContent = `▶  ${state.animeTitle}  —  Episode ${state.currentEp}`;
   } else {
     setStatus(line);
@@ -422,6 +576,8 @@ async function onMenu(prompt, options) {
     else if (!target) setStatus(`${options.length} episodes. Click one to play it.`);
   } else if (PLAYING_RE.test(prompt)) {
     const [, ep, title] = prompt.match(PLAYING_RE);
+    // ani-cli only shows this menu once the player has closed
+    closePlayer();
     state.currentEp = ep;
     if (!state.episodes.length) state.episodes = [ep];
     await loadHistory();
@@ -438,6 +594,7 @@ async function onMenu(prompt, options) {
 }
 
 function onSessionEnd(session, code) {
+  closePlayer();
   el.now.textContent = "Nothing playing";
   if (code !== 0) {
     const message = session.lastLine || "ani-cli stopped unexpectedly.";
@@ -459,8 +616,10 @@ function askGeneric(prompt, options) {
   el.menuDialog.onclose = () => {
     const choice = el.menuDialog.returnValue === "ok" ? el.menuOptions.value : "";
     if (session === state.session && session.alive) answer(choice);
+    syncVideo(true);
   };
   el.menuDialog.showModal();
+  syncVideo(true);
 }
 
 listen("ani-output", ({ payload }) => {
@@ -479,6 +638,32 @@ listen("ani-menu", ({ payload }) => {
   session.pending = { prompt: payload.prompt, options: payload.options };
   log(`[menu] ${payload.prompt} (${payload.options.length} options)`);
   onMenu(payload.prompt, payload.options);
+});
+
+listen("ani-player", ({ payload }) => {
+  if (!sessionFor(payload.session)) return;
+  state.playerOpen = payload.open;
+  playerProps = {};
+  if (payload.open) {
+    state.playerLoading = false;
+    setOscVisible(state.theater);
+    setStatus("Playing. Space to pause, ←/→ to skip, f or ⛶ for fullscreen (Esc to leave).");
+  }
+  log(`[player ${payload.open ? "opened" : "closed"}]`);
+  updatePlayerView();
+});
+
+listen("ani-player-fullscreen", ({ payload }) => {
+  if (sessionFor(payload.session) && state.playerOpen) setTheater(payload.on);
+});
+
+// the backend hid the video for a window resize; bring it back once the size settles
+listen("video-resize-hide", () => onWindowResize());
+
+listen("ani-player-state", ({ payload }) => {
+  if (!sessionFor(payload.session)) return;
+  playerProps[payload.name] = payload.value;
+  renderControls();
 });
 
 listen("ani-exit", ({ payload }) => {
@@ -568,6 +753,8 @@ function play(ep) {
   state.page = pageOf(ep);
   renderEpisodes();
   el.now.textContent = `Loading  ${state.animeTitle}  —  Episode ${ep}…`;
+  state.playerLoading = true;
+  updatePlayerView();
   if (waiting("Select episode")) {
     answer(ep);
   } else if (waiting("Playing episode")) {
@@ -590,6 +777,7 @@ function replay() {
 
 async function stop() {
   await stopSession();
+  closePlayer();
   el.now.textContent = "Nothing playing";
   setStatus("Stopped");
   await refreshWatchedFromDisk();
@@ -648,8 +836,38 @@ el.upscaleHint.addEventListener("click", () => {
 });
 el.fullscreen.addEventListener("change", () => {
   saveSettings();
-  invoke("set_fullscreen", { on: el.fullscreen.checked });
+  invoke("set_start_fullscreen", { on: el.fullscreen.checked });
 });
+el.fsBtn.addEventListener("click", () => toggleFullscreen());
+el.vcPlay.addEventListener("click", togglePause);
+el.vcBack.addEventListener("click", () => seekBy(-10));
+el.vcFwd.addEventListener("click", () => seekBy(10));
+el.vcMute.addEventListener("click", toggleMute);
+el.vcSubs.addEventListener("click", toggleSubs);
+el.vcSpeed.addEventListener("change", () => setPlayerProperty("speed", Number(el.vcSpeed.value)));
+el.vcSeek.addEventListener("input", () => {
+  seekDragging = true;
+  renderControls();
+});
+el.vcSeek.addEventListener("change", () => {
+  seekDragging = false;
+  const target = (Number(el.vcSeek.value) / 1000) * (playerProps.duration || 0);
+  playerCommand("seek", target, "absolute");
+  playerProps["time-pos"] = target;
+  renderControls();
+});
+el.vcVolume.addEventListener("input", () => {
+  const volume = Number(el.vcVolume.value);
+  el.vcVolume.style.setProperty("--vol", `${volume}%`);
+  setPlayerProperty("volume", volume);
+  if (playerProps.mute && volume > 0) setPlayerProperty("mute", false);
+});
+// keep keyboard focus off the bar's buttons, so Space toggles pause instead of re-clicking the last button
+el.videoControls.addEventListener("click", (e) => {
+  if (e.target.closest("button")) document.activeElement.blur();
+});
+window.addEventListener("resize", onWindowResize);
+new ResizeObserver(() => syncVideo()).observe(el.videoSlot);
 el.autoplay.addEventListener("change", saveSettings);
 el.prev.addEventListener("click", () => step(-1));
 el.next.addEventListener("click", () => step(1));
@@ -661,6 +879,31 @@ el.logBtn.addEventListener("click", () => {
   el.log.scrollTop = el.log.scrollHeight;
 });
 document.addEventListener("keydown", (e) => {
+  // these only reach the page when the video isn't focused; inside the video mpv handles f/Esc itself
+  const typing = ["INPUT", "SELECT", "TEXTAREA"].includes(document.activeElement?.tagName);
+  if (e.key === "Escape" && state.theater) {
+    e.preventDefault();
+    toggleFullscreen(false);
+    return;
+  }
+  if (!e.ctrlKey && !e.altKey && !typing && state.playerOpen) {
+    const actions = {
+      f: () => toggleFullscreen(),
+      " ": togglePause,
+      ArrowLeft: () => seekBy(-5),
+      ArrowRight: () => seekBy(5),
+      ArrowUp: () => changeVolume(5),
+      ArrowDown: () => changeVolume(-5),
+      m: toggleMute,
+      c: toggleSubs,
+    };
+    const action = actions[e.key];
+    if (action) {
+      e.preventDefault();
+      action();
+      return;
+    }
+  }
   if ((e.ctrlKey && e.key === "f") || (e.key === "/" && document.activeElement !== el.search)) {
     e.preventDefault();
     el.search.focus();
@@ -670,8 +913,12 @@ document.addEventListener("keydown", (e) => {
 
 loadSettings();
 applyUpscaler(false);
-invoke("set_fullscreen", { on: el.fullscreen.checked });
-setInterval(updateControls, 200);
+invoke("set_start_fullscreen", { on: el.fullscreen.checked });
+// also catches moves a ResizeObserver can't see (e.g. the log opening above the bar)
+setInterval(() => {
+  updateControls();
+  syncVideo();
+}, 200);
 updateControls();
 loadHistory();
 invoke("environment").then((env) => {

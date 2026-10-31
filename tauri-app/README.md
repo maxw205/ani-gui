@@ -29,8 +29,26 @@ If you only change files in `src/`, `cargo build` may not notice. Touch `src-tau
 | `src/index.html`, `src/styles.css` | The window |
 | `src/main.js` | All app logic: searching, episode flow, history, player controls |
 | `src/anilist.js` | Cover art and show details from AniList |
-| `src-tauri/src/main.rs` | Starts ani-cli, relays its menus and output as events, stops mpv |
+| `src-tauri/src/main.rs` | Starts ani-cli, relays its menus and output as events, controls mpv over its IPC pipe |
+| `src-tauri/src/video.rs` | The native window mpv draws into, kept over the page's video area |
 | `src-tauri/bridge/anigui-menu` | ani-cli's menu program (written to `%LOCALAPPDATA%\com.maxw205.animecli\bridge` at startup) |
+| `src-tauri/shaders/` | ArtCNN GLSL shaders and license (written to `%LOCALAPPDATA%\com.maxw205.animecli\shaders` at startup) |
+
+## Video inside the app
+
+Episodes play in the app window, above the episode list. mpv still does the playing (so `mpv.conf` and your input.conf keys work), but it's started with `--wid` and draws into a black native child window (`video.rs`) that sits over the page's video box.
+
+A native window always draws above the page, so the control bar sits directly under the video instead of over it: play/pause, ±10 s (exact seeks, since plain relative seeks snap to keyframes ~10 s apart), a seek bar with the buffered range, time, volume/mute, speed, subtitles and fullscreen. The backend observes mpv's `pause`, `time-pos`, `duration`, `volume`, `mute`, `sub-visibility`, `speed` and `demuxer-cache-time` (the per-frame ones throttled to 4 updates a second) and only accepts the few commands the bar needs (`player_command`). The bar is drawn from what mpv reports, so it also follows mpv's own keys. When the page has focus: Space, ←/→ (5 s), ↑/↓ (volume), M, C and F. mpv's own on-screen controller is hidden while the bar is showing. `main.js` reports the box's position whenever the layout changes and the backend moves the window to match; it's hidden while a dialog is open, since a native window always draws above the page.
+
+While the app window is being resized the video is hidden: the page re-lays itself out every frame and the native window can only follow a frame later, so it would hang over the controls when shrinking and leave gaps when growing. The backend hides it on the first `Resized` event (no round trip through the page) and the page shows it again, in place, 120 ms after the size stops changing.
+
+Fullscreen is the app's: only the video shows and the window goes fullscreen, with mpv's own on-screen controller (which mpv draws over the picture) in place of the bar. It follows mpv's own `fullscreen` property, so ⛶, **f** or double-clicking the video, and **Esc** all do the same thing whether the page or the video has focus. **Start fullscreen** enters it as each episode begins.
+
+## Upscaler
+
+The **Upscaler** menu picks one of the six ArtCNN shaders bundled from [Artoriuz/ArtCNN](https://github.com/Artoriuz/ArtCNN) (MIT): C4F32 for quality or C4F16 for lighter GPUs, each neutral, DS (denoise + sharpen) or DN (denoise + soften). The backend applies it over mpv's IPC pipe to each player a session opens, and immediately when you switch mid-episode.
+
+ArtCNN is a 2× upscaler that only runs when mpv draws the video at least 1.3× bigger than the stream, so on a 1080p screen it needs a 720p stream in fullscreen. The **Use 720p** button appears when the chosen quality makes it pointless. Some episodes aren't offered in every quality and ani-cli falls back to the best one, in which case ArtCNN correctly stays off.
 
 ## Cover art and details
 

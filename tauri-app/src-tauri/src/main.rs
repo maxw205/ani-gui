@@ -6,6 +6,11 @@
 //! each menu (prompt + options) to a file in a temp folder and waits for an answer
 //! file. This side only starts processes and moves those files around; deciding what
 //! to answer and what to show lives in the frontend (src/main.js).
+//!
+//! mpv is told to draw into a child window of the app (`--wid`, see video.rs), so the
+//! video plays inside the window rather than in a separate player.
+
+mod video;
 
 use serde::Serialize;
 use serde_json::json;
@@ -40,6 +45,7 @@ const SHADERS: &[(&str, &[u8])] = &[
 #[derive(Default)]
 struct PlayerPrefs {
     shaders: Vec<PathBuf>,
+    /// start each player in the app's fullscreen (theater) mode
     fullscreen: bool,
 }
 
@@ -123,6 +129,8 @@ struct AppState {
     path_var: String,
     shader_dir: PathBuf,
     prefs: Arc<Mutex<PlayerPrefs>>,
+    /// HWND of the child window mpv draws into
+    video_window: isize,
 }
 
 impl AppState {
@@ -152,6 +160,35 @@ struct ExitEvent {
     code: Option<i32>,
     killed: bool,
 }
+
+/// A player opened (mpv connected) or closed.
+#[derive(Clone, Serialize)]
+struct PlayerEvent {
+    session: u64,
+    open: bool,
+}
+
+/// mpv's fullscreen property changed (f, double-click, Esc in the video, or the app).
+#[derive(Clone, Serialize)]
+struct FullscreenEvent {
+    session: u64,
+    on: bool,
+}
+
+/// One of the player properties the control bar shows changed.
+#[derive(Clone, Serialize)]
+struct PlayerStateEvent {
+    session: u64,
+    name: String,
+    value: serde_json::Value,
+}
+
+/// Properties the control bar shows, observed on every player (fullscreen has id 1).
+const OBSERVED: &[&str] = &["pause", "time-pos", "duration", "volume", "mute", "sub-visibility", "speed", "demuxer-cache-time"];
+/// These change every frame; the bar only needs a few updates a second.
+const THROTTLED: &[&str] = &["time-pos", "demuxer-cache-time"];
+/// Properties the control bar may set.
+const SETTABLE: &[&str] = &["pause", "volume", "mute", "sub-visibility", "speed"];
 
 #[derive(Serialize)]
 struct HistoryEntry {
@@ -188,7 +225,8 @@ fn start_session(app: AppHandle, state: State<AppState>, id: u64, args: Vec<Stri
         .env("PATH", &state.path_var)
         .env("ANI_CLI_MENU", "anigui-menu")
         .env("ANIGUI_IPC", ipc.to_string_lossy().replace('\\', "/"))
-        .env("ANI_CLI_PLAYER_FLAGS", format!("--input-ipc-server={mpv_pipe}"))
+        // ani-cli splits these on spaces; neither value can contain one
+        .env("ANI_CLI_PLAYER_FLAGS", format!("--input-ipc-server={mpv_pipe} --wid={}", state.video_window))
         .env("TERM", "dumb")
         .env_remove("ANI_CLI_MENU_FLAGS")
         .env_remove("ANI_CLI_PLAYER")
@@ -239,26 +277,35 @@ fn start_session(app: AppHandle, state: State<AppState>, id: u64, args: Vec<Stri
     }
 
     // mpv only exists while an episode plays, and Next replaces it with a new one, so
-    // keep connecting to its pipe and hand each new player the chosen upscaler
+    // keep connecting to its pipe: hand each new player the chosen upscaler, and tell
+    // the window when a player opens, closes or toggles fullscreen
     let player_pid = Arc::new(Mutex::new(None));
     {
-        let (pipe, running, prefs, player_pid) = (mpv_pipe.clone(), running.clone(), state.prefs.clone(), player_pid.clone());
+        let (app, pipe, running, prefs, player_pid) =
+            (app.clone(), mpv_pipe.clone(), running.clone(), state.prefs.clone(), player_pid.clone());
         thread::spawn(move || {
             while running.load(Ordering::SeqCst) {
                 let Ok(conn) = fs::OpenOptions::new().read(true).write(true).open(&pipe) else {
                     thread::sleep(Duration::from_millis(200));
                     continue;
                 };
+                let _ = app.emit("ani-player", PlayerEvent { session: id, open: true });
                 let mut commands = {
                     let prefs = prefs.lock().unwrap();
                     let mut commands = shader_commands(&prefs.shaders);
+                    // set before observing, so the first fullscreen event already says "on"
                     if prefs.fullscreen {
                         commands.push_str(&fullscreen_command(true));
                     }
                     commands
                 };
+                commands.push_str(&format!("{}\n", json!({ "command": ["observe_property", 1, "fullscreen"] })));
+                for (i, name) in OBSERVED.iter().enumerate() {
+                    commands.push_str(&format!("{}\n", json!({ "command": ["observe_property", i + 2, name] })));
+                }
                 commands.push_str(&format!("{}\n", json!({ "command": ["get_property", "pid"], "request_id": 1 })));
                 let _ = (&conn).write_all(commands.as_bytes());
+                let mut last_sent: std::collections::HashMap<String, std::time::Instant> = Default::default();
                 // mpv keeps this connection open until the player closes
                 for line in BufReader::new(&conn).lines() {
                     let Ok(line) = line else { break };
@@ -267,9 +314,29 @@ fn start_session(app: AppHandle, state: State<AppState>, id: u64, args: Vec<Stri
                         if let Some(pid) = msg["data"].as_u64() {
                             *player_pid.lock().unwrap() = Some(pid as u32);
                         }
+                        continue;
                     }
+                    if msg["event"] != "property-change" {
+                        continue;
+                    }
+                    let Some(name) = msg["name"].as_str() else { continue };
+                    if name == "fullscreen" {
+                        let on = msg["data"].as_bool().unwrap_or(false);
+                        let _ = app.emit("ani-player-fullscreen", FullscreenEvent { session: id, on });
+                        continue;
+                    }
+                    if THROTTLED.contains(&name) {
+                        let now = std::time::Instant::now();
+                        if last_sent.get(name).is_some_and(|t| now.duration_since(*t) < Duration::from_millis(250)) {
+                            continue;
+                        }
+                        last_sent.insert(name.to_string(), now);
+                    }
+                    let value = msg["data"].clone();
+                    let _ = app.emit("ani-player-state", PlayerStateEvent { session: id, name: name.to_string(), value });
                 }
                 *player_pid.lock().unwrap() = None;
+                let _ = app.emit("ani-player", PlayerEvent { session: id, open: false });
             }
         });
     }
@@ -305,11 +372,48 @@ fn set_upscaler(state: State<AppState>, shaders: Vec<String>) -> Result<bool, St
     Ok(state.send_to_current_player(&commands))
 }
 
-/// Whether players start fullscreen; also applied to an open player.
+/// Whether new players start in fullscreen (theater) mode.
 #[tauri::command]
-fn set_fullscreen(state: State<AppState>, on: bool) -> bool {
+fn set_start_fullscreen(state: State<AppState>, on: bool) {
     state.prefs.lock().unwrap().fullscreen = on;
+}
+
+/// Toggles fullscreen through mpv's own property, so the f key, double-click and the
+/// app's button all agree; the change comes back as an `ani-player-fullscreen` event.
+#[tauri::command]
+fn set_player_fullscreen(state: State<AppState>, on: bool) -> bool {
     state.send_to_current_player(&fullscreen_command(on))
+}
+
+/// Sends a control-bar command to the open player: setting one of SETTABLE, a seek,
+/// or showing/hiding mpv's own on-screen controller. Returns false when no player is open.
+#[tauri::command]
+fn player_command(state: State<AppState>, command: Vec<serde_json::Value>) -> Result<bool, String> {
+    let name = command.first().and_then(|c| c.as_str()).unwrap_or("");
+    let arg = command.get(1).and_then(|a| a.as_str()).unwrap_or("");
+    let allowed = match name {
+        "set_property" => SETTABLE.contains(&arg),
+        "seek" => command.get(1).is_some_and(|a| a.is_number()),
+        "script-message" => arg == "osc-visibility",
+        _ => false,
+    };
+    if !allowed {
+        return Err(format!("player command not allowed: {command:?}"));
+    }
+    Ok(state.send_to_current_player(&format!("{}\n", json!({ "command": command }))))
+}
+
+/// Puts the app window itself in or out of fullscreen (mpv can't while embedded).
+#[tauri::command]
+fn set_window_fullscreen(app: AppHandle, on: bool) -> Result<(), String> {
+    let window = app.get_webview_window("main").ok_or("main window not found")?;
+    window.set_fullscreen(on).map_err(|e| e.to_string())
+}
+
+/// Moves the video window over the page's video area (physical pixels).
+#[tauri::command]
+fn set_video_rect(state: State<AppState>, x: i32, y: i32, width: i32, height: i32, visible: bool) {
+    video::place(state.video_window, x, y, width, height, visible);
 }
 
 #[tauri::command]
@@ -419,22 +523,35 @@ fn main() {
                 }
             }
 
+            let main_window = app.get_webview_window("main").ok_or("main window not found")?;
+            let video_window = video::create(main_window.hwnd()?.0 as isize);
+
             app.manage(AppState {
                 session: Mutex::new(None),
                 bash: find_bash(),
                 path_var: build_path(&bridge_dir),
                 shader_dir,
                 prefs: Arc::new(Mutex::new(PlayerPrefs::default())),
+                video_window,
             });
             Ok(())
         })
-        .on_window_event(|window, event| {
-            if let WindowEvent::Destroyed = event {
+        .on_window_event(|window, event| match event {
+            // hide the video right away, without waiting for the page, and tell the page,
+            // which brings it back once the size settles (see video::hide). The page's own
+            // resize event isn't enough: going fullscreen can end with a Resized here
+            // after the page has already re-laid itself out.
+            WindowEvent::Resized(_) => {
+                video::hide(window.state::<AppState>().video_window);
+                let _ = window.emit("video-resize-hide", ());
+            }
+            WindowEvent::Destroyed => {
                 if let Some(s) = window.state::<AppState>().session.lock().unwrap().take() {
                     // the app is exiting, so a background fallback would never run
                     s.stop(true);
                 }
             }
+            _ => {}
         })
         .invoke_handler(tauri::generate_handler![
             start_session,
@@ -443,7 +560,11 @@ fn main() {
             read_history,
             environment,
             set_upscaler,
-            set_fullscreen
+            set_start_fullscreen,
+            set_player_fullscreen,
+            set_window_fullscreen,
+            player_command,
+            set_video_rect
         ])
         .run(tauri::generate_context!())
         .expect("error while running AnimeCLI");
