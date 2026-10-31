@@ -37,7 +37,13 @@ Needs ani-cli (and its Git Bash) installed, e.g. with scoop. mpv isn't used.
 
 When the video ends, the page tells the stand-in player to exit, so ani-cli shows its after-playback menu and Next / Autoplay / history work as with any player.
 
+## Upscaler (Anime4K)
+
+The **Upscaler** menu in the player's control bar runs [Anime4K](https://github.com/bloc97/Anime4K) on the GPU through WebGPU, using the presets from [Anime4K-WebGPU](https://github.com/Anime4KWebBoost/Anime4K-WebGPU) (MIT). Mode A suits 1080p sources, B 720p, C 480p; A+A, B+B and C+A are stronger and heavier.
+
+`src/upscaler.js` copies each frame the `<video>` presents into a GPU texture, runs the chosen preset and draws the result into a `<canvas>` over the video, at the canvas's real pixel size, so it follows window resizes and fullscreen and upscales to what's actually on screen. The video keeps decoding and playing the sound underneath (invisible, but still taking the clicks); seeking is unaffected and nothing is re-encoded. The package's own `render()` helper can't be stopped and fixes its sizes once, so the presets are driven directly. While upscaling, subtitles are drawn by the player above the canvas, since the browser draws them as part of the (now invisible) video. If WebGPU isn't available or fails, it falls back to the plain video. The upscaler code (mostly the networks' weights, ~3.5 MB) loads only when it's first turned on.
+
 ## Not done yet
 
-- Upscaling (planned through ffmpeg's libplacebo filter, which runs the ArtCNN shaders).
+- ArtCNN (the GLSL shaders are written for mpv/libplacebo and would need porting to WebGPU).
 - Packaging into an installer (e.g. electron-builder).

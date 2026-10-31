@@ -14,10 +14,11 @@ const LOG_LINES = 400;
 // ---------- the store ----------
 
 function loadSettings() {
+  const defaults = { mode: "sub", quality: "best", autoplay: false, upscaler: "off" };
   try {
-    return { mode: "sub", quality: "best", autoplay: false, ...JSON.parse(localStorage.getItem("settings") || "{}") };
+    return { ...defaults, ...JSON.parse(localStorage.getItem("settings") || "{}") };
   } catch {
-    return { mode: "sub", quality: "best", autoplay: false };
+    return defaults;
   }
 }
 

@@ -23,7 +23,8 @@ export default defineConfig({
   // the built page is loaded from disk (file://), so asset paths must be relative
   base: "./",
   plugins: [react(), contentSecurityPolicy],
-  // hls.js alone is ~500 kB; a desktop app loading from disk doesn't need it split up
-  build: { outDir: "dist", emptyOutDir: true, chunkSizeWarningLimit: 1500 },
+  // hls.js is ~500 kB and the Anime4K weights ~3.5 MB (loaded only when the upscaler is
+  // turned on); a desktop app loading from disk doesn't need them split up further
+  build: { outDir: "dist", emptyOutDir: true, chunkSizeWarningLimit: 4000 },
   server: { port: 5173, strictPort: true },
 });

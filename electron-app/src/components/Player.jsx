@@ -1,7 +1,10 @@
 import Hls from "hls.js";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { log, setStatus, useStore, videoEnded, videoStarted } from "../store.js";
+import { log, setSetting, setStatus, useStore, videoEnded, videoStarted } from "../store.js";
 import { isTyping } from "../util.js";
+
+// menu labels; the upscaler code itself (src/upscaler.js) only loads once it's turned on
+const UPSCALER_LABELS = { off: "Upscaler off", a: "Anime4K A", b: "Anime4K B", c: "Anime4K C", aa: "Anime4K A+A", bb: "Anime4K B+B", ca: "Anime4K C+A" };
 
 const HIDE_AFTER_MS = 2500;
 const SPEEDS = [0.75, 1, 1.25, 1.5, 2];
@@ -20,9 +23,12 @@ function formatTime(seconds) {
  * the cursor hide after a few seconds without the mouse moving while it plays.
  */
 export default function Player() {
-  const { stream, loadingVideo } = useStore();
+  const { stream, loadingVideo, settings } = useStore();
   const frame = useRef(null);
   const video = useRef(null);
+  const canvas = useRef(null);
+  const upscaler = useRef(null); // promise of the WebGPU upscaler, created on first use
+  const [upscaling, setUpscaling] = useState(false); // the canvas is showing the upscaled picture
   const [v, setV] = useState({ paused: true, time: 0, duration: 0, buffered: 0, volume: 1, muted: false, speed: 1 });
   const [subsOn, setSubsOn] = useState(true);
   const [buffering, setBuffering] = useState(false);
@@ -54,11 +60,69 @@ export default function Player() {
     };
   }, [stream?.url]);
 
-  // the subtitle track follows the CC button
+  // Anime4K: the video keeps decoding (and playing the sound) underneath; the canvas shows
+  // its frames upscaled. Falls back to the plain video if WebGPU isn't there or fails.
+  useEffect(() => {
+    const mode = settings.upscaler;
+    if (!stream || mode === "off") {
+      setUpscaling(false);
+      upscaler.current?.then((u) => u.stop()).catch(() => {});
+      return undefined;
+    }
+    let cancelled = false;
+    upscaler.current ??= import("../upscaler.js").then(({ createUpscaler }) =>
+      createUpscaler(canvas.current, {
+        onError: (message) => {
+          setUpscaling(false);
+          setStatus(`Upscaler stopped: ${message}`, true);
+        },
+      }));
+    upscaler.current
+      .then((u) => {
+        if (cancelled) return;
+        u.start(video.current, mode);
+        setUpscaling(true);
+        log(`[upscaler] ${UPSCALER_LABELS[mode]}`);
+      })
+      .catch((err) => {
+        upscaler.current = null;
+        setUpscaling(false);
+        setStatus(`Upscaler unavailable: ${err.message}`, true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [settings.upscaler, stream?.url]);
+
+  // the canvas renders at its real pixel size, so the upscale targets what's on screen
+  useEffect(() => {
+    const el = canvas.current;
+    const observer = new ResizeObserver(() => {
+      const scale = window.devicePixelRatio || 1;
+      el.width = Math.max(1, Math.round(el.clientWidth * scale));
+      el.height = Math.max(1, Math.round(el.clientHeight * scale));
+      upscaler.current?.then((u) => u.resize()).catch(() => {});
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+  useEffect(() => () => {
+    upscaler.current?.then((u) => u.destroy()).catch(() => {});
+  }, []);
+
+  // The subtitle track follows the CC button. The browser draws subtitles as part of the
+  // video, which is invisible while upscaling, so then the track runs hidden and its
+  // current lines are drawn above the canvas instead.
+  const [captions, setCaptions] = useState([]);
   useEffect(() => {
     const track = video.current?.textTracks[0];
-    if (track) track.mode = subsOn ? "showing" : "hidden";
-  }, [subsOn, stream?.subtitles]);
+    if (!track) return undefined;
+    track.mode = subsOn ? (upscaling ? "hidden" : "showing") : "hidden";
+    const onCueChange = () => setCaptions([...(track.activeCues ?? [])].map((cue) => cue.text.replace(/<[^>]+>/g, "")));
+    track.addEventListener("cuechange", onCueChange);
+    onCueChange();
+    return () => track.removeEventListener("cuechange", onCueChange);
+  }, [subsOn, upscaling, stream?.subtitles]);
 
   const read = useCallback(() => {
     const el = video.current;
@@ -136,7 +200,7 @@ export default function Player() {
 
   return (
     <div className="player-area">
-      <div ref={frame} className={`player-frame ${hidden ? "idle" : ""} ${fullscreen ? "fullscreen" : ""}`}
+      <div ref={frame} className={`player-frame ${hidden ? "idle" : ""} ${fullscreen ? "fullscreen" : ""} ${upscaling ? "upscaled" : ""}`}
         onMouseMove={poke} onMouseLeave={() => !v.paused && setControlsShown(false)}>
         <video ref={video} className="video" crossOrigin="anonymous" playsInline
           onClick={togglePause} onDoubleClick={toggleFullscreen}
@@ -147,6 +211,11 @@ export default function Player() {
           onEnded={() => { read(); videoEnded(); }}>
           {stream?.subtitles && <track kind="subtitles" label="English" srcLang="en" src={stream.subtitles} default />}
         </video>
+        {/* the upscaled picture; clicks pass through to the video */}
+        <canvas ref={canvas} className="upscale-canvas" />
+        {upscaling && subsOn && captions.length > 0 && (
+          <div className="captions">{captions.map((line, i) => <span key={i}>{line}</span>)}</div>
+        )}
 
         {(!stream || buffering) && <div className="video-message">{loadingVideo || !stream ? "Loading video…" : "Buffering…"}</div>}
 
@@ -184,6 +253,11 @@ export default function Player() {
             <select className="speed" aria-label="Playback speed" title="Playback speed" value={v.speed}
               onChange={(e) => { el().playbackRate = Number(e.target.value); }}>
               {SPEEDS.map((sp) => <option key={sp} value={sp}>{sp}×</option>)}
+            </select>
+            <select className="speed upscaler" aria-label="Upscaler" value={settings.upscaler}
+              title="Anime4K upscaling on the GPU. Mode A suits 1080p sources, B 720p, C 480p; the + modes are stronger and heavier."
+              onChange={(e) => setSetting("upscaler", e.target.value)}>
+              {Object.entries(UPSCALER_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
             </select>
             <button type="button" className={`icon cc ${subsOn ? "" : "off"}`} aria-pressed={subsOn} title="Subtitles (c)"
               disabled={!stream?.subtitles} onClick={() => setSubsOn(!subsOn)}>CC</button>
