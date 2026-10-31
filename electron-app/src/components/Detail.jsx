@@ -3,27 +3,32 @@ import { facts, nextAiring, plainDescription } from "../anilist.js";
 import { PAGE_SIZE, play, setPage, useStore } from "../store.js";
 import Player from "./Player.jsx";
 
-/** The right-hand panel: the player while an episode plays, the show's details and its episodes. */
+/**
+ * The right-hand panel: the show's details and its episodes. While an episode plays, the player
+ * comes first, then the episodes, with the details below them.
+ */
 export default function Detail() {
   const s = useStore();
   const playing = Boolean(s.stream || s.loadingVideo);
   const media = s.details;
+  const head = (
+    <div className={`detail-head ${playing ? "below" : ""}`}>
+      {media && <img className="cover" alt="" src={media.coverImage.extraLarge || media.coverImage.large} />}
+      <div className="detail-text">
+        <h1>{s.title}</h1>
+        {media && <ShowDetails media={media} shownTitle={s.title} />}
+      </div>
+    </div>
+  );
   return (
     <section className={`panel detail ${playing ? "playing" : ""}`}
       style={media?.coverImage?.color ? { "--show-color": media.coverImage.color } : undefined}>
       <div className="detail-scroll">
         {playing && <Player />}
         {!playing && media?.bannerImage && <div className="banner" style={{ backgroundImage: `url(${JSON.stringify(media.bannerImage)})` }} />}
-        {!playing && (
-          <div className="detail-head">
-            {media && <img className="cover" alt="" src={media.coverImage.extraLarge || media.coverImage.large} />}
-            <div className="detail-text">
-              <h1>{s.title}</h1>
-              {media && <ShowDetails media={media} shownTitle={s.title} />}
-            </div>
-          </div>
-        )}
+        {!playing && head}
         <Episodes />
+        {playing && head}
       </div>
     </section>
   );

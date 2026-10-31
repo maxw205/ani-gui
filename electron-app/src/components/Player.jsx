@@ -7,7 +7,15 @@ import { isTyping } from "../util.js";
 const UPSCALER_LABELS = { off: "Upscaler off", a: "Anime4K A", b: "Anime4K B", c: "Anime4K C", aa: "Anime4K A+A", bb: "Anime4K B+B", ca: "Anime4K C+A" };
 
 const HIDE_AFTER_MS = 2500;
-const SPEEDS = [0.75, 1, 1.25, 1.5, 2];
+// The speed slider runs 0.1× to 10× on a log scale, so slow and fast get the same room and 1× sits
+// a bit past the middle; speeds are rounded to steps of 0.05×.
+const SPEED_MIN = 0.1;
+const SPEED_MAX = 10;
+const speedAt = (position) =>
+  Math.max(SPEED_MIN, Math.round(SPEED_MIN * (SPEED_MAX / SPEED_MIN) ** position * 20) / 20);
+const positionOf = (speed) => Math.log(speed / SPEED_MIN) / Math.log(SPEED_MAX / SPEED_MIN);
+const showSpeed = (speed) => `${Number(speed.toFixed(2))}×`;
+const SPEED_PRESETS = [[0.5, "0.5×"], [1, "1×"], [1.5, "1.5×"], [2, "2×"]];
 // the caption settings menu: [setting, label, min, max, step, how to show the value]
 const percent = (value) => `${Math.round(value * 100)}%`;
 const CAPTION_SLIDERS = [
@@ -149,21 +157,24 @@ export default function Player() {
     return () => track.removeEventListener("cuechange", onCueChange);
   }, [stream?.subtitles]);
 
-  // the caption settings menu, closed by clicking anywhere else
-  const [capMenu, setCapMenu] = useState(false);
+  // the control bar's pop-up menus ("captions" or "speed"), closed by clicking anywhere else
+  const [menu, setMenu] = useState(null);
+  const toggleMenu = (name) => setMenu((open) => (open === name ? null : name));
+  useEffect(() => {
+    if (!menu) return undefined;
+    const onDown = (e) => {
+      if (!e.target.closest(".popup, .popup-button")) setMenu(null);
+    };
+    document.addEventListener("pointerdown", onDown);
+    return () => document.removeEventListener("pointerdown", onDown);
+  }, [menu]);
+
+  // caption settings
   const [colorMenu, setColorMenu] = useState(false); // its custom colour sliders
   const cap = settings.captions;
   const rgb = toRgb(cap.color);
   const customColor = !CAPTION_COLORS.some(([color]) => color === cap.color);
   const setCaption = (key, value) => setSetting("captions", { ...cap, [key]: value });
-  useEffect(() => {
-    if (!capMenu) return undefined;
-    const onDown = (e) => {
-      if (!e.target.closest(".cap-menu, .cap-button")) setCapMenu(false);
-    };
-    document.addEventListener("pointerdown", onDown);
-    return () => document.removeEventListener("pointerdown", onDown);
-  }, [capMenu]);
 
   const read = useCallback(() => {
     const el = video.current;
@@ -223,9 +234,9 @@ export default function Player() {
   // keyboard shortcuts while a video is up
   useEffect(() => {
     const onKey = (e) => {
-      // Esc closes the caption menu first, even with one of its dropdowns focused
-      if (e.key === "Escape" && capMenu) {
-        setCapMenu(false);
+      // Esc closes an open menu first, even with one of its controls focused
+      if (e.key === "Escape" && menu) {
+        setMenu(null);
         return;
       }
       if (e.ctrlKey || e.altKey || isTyping() || !video.current) return;
@@ -250,14 +261,14 @@ export default function Player() {
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [poke, toggleFullscreen, capMenu]);
+  }, [poke, toggleFullscreen, menu]);
 
   const duration = v.duration;
   const shownTime = seekDrag !== null ? seekDrag * duration : v.time;
   const played = duration ? (shownTime / duration) * 100 : 0;
   const bufferedPct = duration ? Math.min(100, (v.buffered / duration) * 100) : 0;
   const muted = v.muted || v.volume === 0;
-  const hidden = !controlsShown && !v.paused && !capMenu;
+  const hidden = !controlsShown && !v.paused && !menu;
 
   return (
     <div className="player-area">
@@ -296,8 +307,8 @@ export default function Player() {
         </div>
 
         <div className={`controls ${hidden ? "hidden" : ""}`} onMouseMove={poke}>
-          {capMenu && (
-            <div className="cap-menu" role="dialog" aria-label="Caption settings">
+          {menu === "captions" && (
+            <div className="popup cap-menu" role="dialog" aria-label="Caption settings">
               {CAPTION_SLIDERS.map(([key, label, min, max, step, show]) => (
                 <label key={key} className="cap-row">
                   <span>{label}</span>
@@ -383,10 +394,28 @@ export default function Player() {
             <input type="range" className="volume" min="0" max="1" step="0.01" aria-label="Volume"
               value={muted ? 0 : v.volume} style={{ "--vol": `${(muted ? 0 : v.volume) * 100}%` }}
               onChange={(e) => setVolume(Number(e.target.value))} />
-            <select className="speed" aria-label="Playback speed" title="Playback speed" value={v.speed}
-              onChange={(e) => { el().playbackRate = Number(e.target.value); }}>
-              {SPEEDS.map((sp) => <option key={sp} value={sp}>{sp}×</option>)}
-            </select>
+            <span className="rate-anchor">
+              <button type="button" className="rate-value popup-button" title="Playback speed"
+                aria-expanded={menu === "speed"} onClick={() => toggleMenu("speed")}>{showSpeed(v.speed)}</button>
+              {menu === "speed" && (
+                <div className="popup rate-menu" role="dialog" aria-label="Playback speed">
+                  <div className="rate-head">
+                    <span>Speed</span>
+                    <b>{showSpeed(v.speed)}</b>
+                  </div>
+                  <input type="range" className="rate" min="0" max="1" step="0.005" aria-label="Playback speed"
+                    value={positionOf(v.speed)} style={{ "--rate": `${positionOf(v.speed) * 100}%` }}
+                    onChange={(e) => { el().playbackRate = speedAt(Number(e.target.value)); }} />
+                  <div className="rate-scale"><span>0.1×</span><span>10×</span></div>
+                  <div className="rate-presets">
+                    {SPEED_PRESETS.map(([speed, label]) => (
+                      <button key={speed} type="button" className={v.speed === speed ? "on" : ""} aria-pressed={v.speed === speed}
+                        onClick={() => { el().playbackRate = speed; }}>{label}</button>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </span>
             <select className="speed upscaler" aria-label="Upscaler" value={settings.upscaler}
               title="Anime4K upscaling on the GPU. Mode A suits 1080p sources, B 720p, C 480p; the + modes are stronger and heavier."
               onChange={(e) => setSetting("upscaler", e.target.value)}>
@@ -394,8 +423,8 @@ export default function Player() {
             </select>
             <button type="button" className={`icon cc ${subsOn ? "" : "off"}`} aria-pressed={subsOn} title="Subtitles (c)"
               disabled={!stream?.subtitles} onClick={() => setSubsOn(!subsOn)}>CC</button>
-            <button type="button" className="icon cap-button" aria-label="Caption settings" title="Caption settings"
-              aria-expanded={capMenu} onClick={() => setCapMenu(!capMenu)}>
+            <button type="button" className="icon popup-button" aria-label="Caption settings" title="Caption settings"
+              aria-expanded={menu === "captions"} onClick={() => toggleMenu("captions")}>
               <svg viewBox="0 0 24 24" className="stroke"><circle cx="12" cy="12" r="3" /><path d="M12 3v2.5M12 18.5V21M3 12h2.5M18.5 12H21M5.6 5.6l1.8 1.8M16.6 16.6l1.8 1.8M5.6 18.4l1.8-1.8M16.6 7.4l1.8-1.8" /></svg>
             </button>
             <button type="button" className="icon" aria-label={fullscreen ? "Leave fullscreen" : "Fullscreen"} title="Fullscreen (f, or double-click the video)" onClick={toggleFullscreen}>
