@@ -2,9 +2,10 @@
 // https://github.com/Anime4KWebBoost/Anime4K-WebGPU).
 //
 // The <video> element keeps decoding (and playing the sound); every frame it presents is
-// copied to a GPU texture, run through an Anime4K preset and drawn into a <canvas> laid over
-// it, at the canvas's real pixel size. The package's own render() helper can't be stopped
-// and fixes its sizes once, so this drives the preset pipelines itself.
+// copied to a GPU texture, run through an Anime4K preset (upscaling to the screen's size) and
+// drawn into a <canvas> laid over it, at the canvas's real pixel size. The package's own
+// render() helper can't be stopped and fixes its sizes once, so this drives the preset
+// pipelines itself.
 
 import { ModeA, ModeAA, ModeB, ModeBB, ModeC, ModeCA } from "anime4k-webgpu";
 
@@ -84,11 +85,25 @@ export async function createUpscaler(canvas, { onError } = {}) {
     return { x: Math.floor((canvas.width - width) / 2), y: Math.floor((canvas.height - height) / 2), width, height };
   }
 
-  /** (Re)builds the preset for the current video and canvas size, if those changed. */
+  /**
+   * The size the preset upscales to: the video fitted to the whole screen. Building a preset
+   * compiles its shaders, which takes a moment, so it's built once for the biggest view and
+   * smaller ones (the player in the window) are drawn from it scaled down. Resizing the window
+   * or going fullscreen then never rebuilds it.
+   */
+  function target() {
+    const scale = Math.min(
+      (screen.width * devicePixelRatio) / video.videoWidth,
+      (screen.height * devicePixelRatio) / video.videoHeight,
+    );
+    return { width: Math.round(video.videoWidth * scale), height: Math.round(video.videoHeight * scale) };
+  }
+
+  /** (Re)builds the preset for the current video and screen, if those changed. */
   function build() {
     if (!video?.videoWidth) return false;
-    const view = viewport();
-    const key = `${video.videoWidth}x${video.videoHeight}>${view.width}x${view.height}:${Preset?.name}`;
+    const size = target();
+    const key = `${video.videoWidth}x${video.videoHeight}>${size.width}x${size.height}:${Preset?.name}`;
     if (key === built) return true;
     built = key;
     if (!input || input.width !== video.videoWidth || input.height !== video.videoHeight) {
@@ -103,7 +118,7 @@ export async function createUpscaler(canvas, { onError } = {}) {
       device,
       inputTexture: input,
       nativeDimensions: { width: video.videoWidth, height: video.videoHeight },
-      targetDimensions: { width: view.width, height: view.height },
+      targetDimensions: size,
     });
     drawBindGroup = device.createBindGroup({
       layout: drawPipeline.getBindGroupLayout(0),
@@ -156,7 +171,7 @@ export async function createUpscaler(canvas, { onError } = {}) {
       if (copyFrame()) draw(); // the frame that's already showing
     },
 
-    /** Call after the canvas's pixel size changed: rebuilds for the new size and redraws. */
+    /** Call after the canvas's pixel size changed: redraws at the new size. */
     resize() {
       if (video && Preset && input) draw();
     },

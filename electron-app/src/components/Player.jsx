@@ -149,14 +149,27 @@ export default function Player() {
   }, [v.paused, poke]);
   useEffect(() => () => clearTimeout(hideTimer.current), []);
 
+  // Not requestFullscreen(), which in Electron shows the app stretched to the screen before the
+  // video takes over. Going in, the video covers the window and is drawn before the window grows,
+  // since Windows keeps showing the last frame while it resizes; coming out, both happen at once.
+  const fullscreenRef = useRef(false);
   const toggleFullscreen = useCallback(() => {
-    if (document.fullscreenElement) document.exitFullscreen();
-    else frame.current?.requestFullscreen();
+    const on = !fullscreenRef.current;
+    fullscreenRef.current = on;
+    setFullscreen(on);
+    if (!on) window.anicli.setFullscreen(false);
+    else requestAnimationFrame(() => requestAnimationFrame(() => fullscreenRef.current && window.anicli.setFullscreen(true)));
   }, []);
   useEffect(() => {
-    const onChange = () => setFullscreen(document.fullscreenElement === frame.current);
-    document.addEventListener("fullscreenchange", onChange);
-    return () => document.removeEventListener("fullscreenchange", onChange);
+    // the window left fullscreen some other way
+    const off = window.anicli.on("win:left-fullscreen", () => {
+      fullscreenRef.current = false;
+      setFullscreen(false);
+    });
+    return () => {
+      off();
+      if (fullscreenRef.current) window.anicli.setFullscreen(false);
+    };
   }, []);
 
   const el = () => video.current;
@@ -165,11 +178,12 @@ export default function Player() {
   const setVolume = (value) => { el().volume = value; if (value > 0) el().muted = false; };
   const toggleMute = () => { el().muted = !el().muted; };
 
-  // keyboard shortcuts while a video is up (Esc leaves fullscreen on its own)
+  // keyboard shortcuts while a video is up
   useEffect(() => {
     const onKey = (e) => {
       if (e.ctrlKey || e.altKey || isTyping() || !video.current) return;
       const actions = {
+        Escape: () => fullscreenRef.current && toggleFullscreen(),
         " ": togglePause,
         k: togglePause,
         ArrowLeft: () => seekBy(-5),

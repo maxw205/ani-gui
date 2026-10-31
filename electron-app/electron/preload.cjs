@@ -2,7 +2,7 @@
 
 const { contextBridge, ipcRenderer } = require("electron");
 
-const EVENTS = ["ani:output", "ani:menu", "ani:exit", "ani:stream"];
+const EVENTS = ["ani:output", "ani:menu", "ani:exit", "ani:stream", "win:left-fullscreen"];
 
 contextBridge.exposeInMainWorld("anicli", {
   start: (id, args) => ipcRenderer.invoke("ani:start", { id, args }),
@@ -11,6 +11,7 @@ contextBridge.exposeInMainWorld("anicli", {
   stop: () => ipcRenderer.invoke("ani:stop"),
   history: () => ipcRenderer.invoke("ani:history"),
   environment: () => ipcRenderer.invoke("ani:environment"),
+  setFullscreen: (on) => ipcRenderer.invoke("win:fullscreen", Boolean(on)),
   /** Subscribes to one of EVENTS; returns an unsubscribe function. */
   on(event, callback) {
     if (!EVENTS.includes(event)) throw new Error(`unknown event ${event}`);

@@ -17,6 +17,8 @@ if (process.platform === "linux") {
   app.commandLine.appendSwitch("enable-features", "Vulkan");
 }
 
+const BACKGROUND = "#15161c"; // the page's own background, shown before it has drawn
+
 let win = null;
 let anicli = null;
 const streams = new StreamProxy();
@@ -28,13 +30,17 @@ function createWindow() {
     minWidth: 880,
     minHeight: 560,
     title: "AnimeCLI",
-    backgroundColor: "#15161c",
+    backgroundColor: BACKGROUND,
     autoHideMenuBar: true,
     webPreferences: { preload: path.join(__dirname, "preload.cjs"), contextIsolation: true, sandbox: true },
   });
   const devUrl = process.env.ELECTRON_RENDERER_URL;
   if (devUrl) win.loadURL(devUrl);
   else win.loadFile(path.join(__dirname, "..", "dist", "index.html"));
+  win.on("leave-full-screen", () => {
+    win.setBackgroundColor(BACKGROUND);
+    win.webContents.send("win:left-fullscreen");
+  });
   win.on("closed", () => {
     win = null;
   });
@@ -54,6 +60,12 @@ app.whenReady().then(() => {
   ipcMain.handle("ani:stop", () => anicli.stop());
   ipcMain.handle("ani:history", () => anicli.history());
   ipcMain.handle("ani:environment", () => anicli.environment());
+  ipcMain.handle("win:fullscreen", (_e, on) => {
+    // Windows fills the newly uncovered part of the window with this until the page redraws:
+    // black while fullscreen, so that looks like the video's borders instead of the app
+    if (on) win?.setBackgroundColor("#000000");
+    win?.setFullScreen(on);
+  });
 
   createWindow();
 });
