@@ -77,6 +77,9 @@ function PlayerBar() {
       <label className="check">
         <input type="checkbox" checked={s.settings.autoplay} onChange={(e) => setSetting("autoplay", e.target.checked)} /> Autoplay next
       </label>
+      <label className="check" title="Jump over openings, endings and recaps by itself (timings from AniSkip)">
+        <input type="checkbox" checked={s.settings.autoSkip} onChange={(e) => setSetting("autoSkip", e.target.checked)} /> Auto-skip intros
+      </label>
       <button type="button" disabled={!(i > 0)} onClick={() => step(-1)}>⏮&nbsp; Previous</button>
       <button type="button" disabled={i < 0} onClick={replay}>↻&nbsp; Replay</button>
       <button type="button" disabled={!(i >= 0 && i < s.episodes.length - 1)} onClick={() => step(1)}>Next &nbsp;⏭</button>

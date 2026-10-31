@@ -1,6 +1,7 @@
 import Hls from "hls.js";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { CAPTION_DEFAULTS, log, setSetting, setStatus, useStore, videoEnded, videoStarted, videoTime } from "../store.js";
+import { skipTimes } from "../aniskip.js";
 import { isTyping } from "../util.js";
 
 // menu labels; the upscaler code itself (src/upscaler.js) only loads once it's turned on
@@ -16,6 +17,7 @@ const speedAt = (position) =>
 const positionOf = (speed) => Math.log(speed / SPEED_MIN) / Math.log(SPEED_MAX / SPEED_MIN);
 const showSpeed = (speed) => `${Number(speed.toFixed(2))}×`;
 const SPEED_PRESETS = [[0.5, "0.5×"], [1, "1×"], [1.5, "1.5×"], [2, "2×"]];
+const SKIP_LABELS = { intro: "intro", outro: "ending", recap: "recap" };
 // the caption settings menu: [setting, label, min, max, step, how to show the value]
 const percent = (value) => `${Math.round(value * 100)}%`;
 const CAPTION_SLIDERS = [
@@ -55,7 +57,7 @@ function formatTime(seconds) {
  * the cursor hide after a few seconds without the mouse moving while it plays.
  */
 export default function Player() {
-  const { stream, loadingVideo, settings, animeTitle, currentEp } = useStore();
+  const { stream, loadingVideo, settings, animeTitle, currentEp, details } = useStore();
   const frame = useRef(null);
   const video = useRef(null);
   const canvas = useRef(null);
@@ -184,6 +186,40 @@ export default function Player() {
     setV({ paused: el.paused, time: el.currentTime, duration: el.duration || 0, buffered, volume: el.volume, muted: el.muted, speed: el.playbackRate });
   }, []);
 
+  // Openings, endings and recaps (AniSkip, by the show's MyAnimeList id from AniList): a Skip
+  // button while one plays, or with Auto-skip on, jumped over by itself, once each, so seeking
+  // back into one plays it.
+  const [skips, setSkips] = useState([]);
+  const malId = details?.idMal;
+  const hasDuration = v.duration > 0;
+  useEffect(() => {
+    setSkips([]);
+    if (!stream || !malId || !currentEp || !hasDuration) return undefined;
+    let current = true;
+    skipTimes(malId, currentEp, video.current.duration)
+      .then((parts) => {
+        if (!current) return;
+        setSkips(parts);
+        if (parts.length) log(`[AniSkip] ${parts.map((p) => `${p.kind} ${Math.round(p.start)}-${Math.round(p.end)} s`).join(", ")}`);
+      })
+      .catch((err) => log(`[AniSkip] ${err.message}`));
+    return () => {
+      current = false;
+    };
+  }, [stream, malId, currentEp, hasDuration]);
+  const skipping = skips.find((part) => v.time >= part.start && v.time < part.end - 0.5);
+  const autoSkipped = useRef(new Set());
+  useEffect(() => {
+    autoSkipped.current = new Set();
+  }, [stream]);
+  useEffect(() => {
+    if (!skipping || !settings.autoSkip || autoSkipped.current.has(skipping)) return;
+    autoSkipped.current.add(skipping);
+    video.current.currentTime = skipping.end;
+  }, [skipping, settings.autoSkip]);
+  // with Auto-skip on, the button only shows when seeking back into an already skipped part
+  const showSkip = skipping && !(settings.autoSkip && !autoSkipped.current.has(skipping));
+
   // controls (and cursor) auto-hide while playing
   const poke = useCallback(() => {
     setControlsShown(true);
@@ -302,6 +338,13 @@ export default function Player() {
 
         {(!stream || buffering) && <div className="video-message">{loadingVideo || !stream ? "Loading video…" : "Buffering…"}</div>}
 
+        {showSkip && (
+          <button type="button" className={`skip-button ${hidden ? "low" : ""}`}
+            onClick={() => { video.current.currentTime = skipping.end; }}>
+            Skip {SKIP_LABELS[skipping.kind]}
+          </button>
+        )}
+
         <div className={`title-bar ${hidden ? "hidden" : ""}`}>
           {stream?.title || [animeTitle, currentEp && `Episode ${currentEp}`].filter(Boolean).join("  —  ")}
         </div>
@@ -365,7 +408,14 @@ export default function Player() {
             </div>
           )}
           <div className="seek">
-            <div className="track"><div className="buffered" style={{ width: `${bufferedPct}%` }} /><div className="played" style={{ width: `${played}%` }} /></div>
+            <div className="track">
+              <div className="buffered" style={{ width: `${bufferedPct}%` }} />
+              <div className="played" style={{ width: `${played}%` }} />
+              {duration > 0 && skips.map((part) => (
+                <div key={part.kind} className="skip-mark"
+                  style={{ left: `${(part.start / duration) * 100}%`, width: `${((part.end - part.start) / duration) * 100}%` }} />
+              ))}
+            </div>
             <input type="range" min="0" max="1000" step="1" aria-label="Seek" disabled={!stream}
               value={Math.round((duration ? shownTime / duration : 0) * 1000)}
               onChange={(e) => setSeekDrag(Number(e.target.value) / 1000)}

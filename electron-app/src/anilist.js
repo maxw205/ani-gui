@@ -4,11 +4,11 @@
 // for a whole result list) and cached in localStorage for a week.
 
 const ENDPOINT = "https://graphql.anilist.co";
-const CACHE_KEY = "anilist-cache-v1";
+const CACHE_KEY = "anilist-cache-v2"; // v2: also idMal, for AniSkip
 const CACHE_MS = 7 * 24 * 60 * 60 * 1000;
 const BATCH = 10; // titles per request, keeps the query under AniList's complexity limit
 
-const FIELDS = `id title { romaji english native } synonyms popularity
+const FIELDS = `id idMal title { romaji english native } synonyms popularity
   coverImage { large extraLarge color } bannerImage description(asHtml: false)
   format status episodes duration season seasonYear averageScore genres
   studios(isMain: true) { nodes { name } } nextAiringEpisode { episode airingAt }`;
@@ -20,6 +20,7 @@ let cache = loadCache();
 
 function loadCache() {
   try {
+    localStorage.removeItem("anilist-cache-v1"); // the cache from before idMal
     const stored = JSON.parse(localStorage.getItem(CACHE_KEY) || "{}");
     const cutoff = Date.now() - CACHE_MS;
     return Object.fromEntries(Object.entries(stored).filter(([, entry]) => entry.at > cutoff));

@@ -20,7 +20,14 @@ const LOG_LINES = 400;
 export const CAPTION_DEFAULTS = { size: 1, color: "#ffffff", background: 0.6, lift: 7, outline: 4, font: "app", bold: false };
 
 function loadSettings() {
-  const defaults = { mode: "sub", quality: "best", autoplay: false, upscaler: "off", captions: CAPTION_DEFAULTS };
+  const defaults = {
+    mode: "sub",
+    quality: "best",
+    autoplay: false,
+    autoSkip: false, // jump over openings, endings and recaps (AniSkip) without asking
+    upscaler: "off",
+    captions: CAPTION_DEFAULTS,
+  };
   try {
     const saved = JSON.parse(localStorage.getItem("settings") || "{}");
     return { ...defaults, ...saved, captions: { ...defaults.captions, ...saved.captions } };

@@ -8,7 +8,7 @@ const CSP = [
   "script-src 'self'",
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data: https://s4.anilist.co",
-  "connect-src 'self' anistream: https://graphql.anilist.co",
+  "connect-src 'self' anistream: https://graphql.anilist.co https://api.aniskip.com",
   "media-src 'self' blob: anistream:",
 ].join("; ");
 
