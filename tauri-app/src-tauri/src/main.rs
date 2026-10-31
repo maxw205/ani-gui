@@ -403,6 +403,44 @@ fn player_command(state: State<AppState>, command: Vec<serde_json::Value>) -> Re
     Ok(state.send_to_current_player(&format!("{}\n", json!({ "command": command }))))
 }
 
+/// Shows the floating control bar centred near the bottom of the (fullscreen) main
+/// window, without taking the keyboard from the video; or hides it.
+#[tauri::command]
+fn show_controls_overlay(app: AppHandle, show: bool) -> Result<(), String> {
+    let controls = app.get_webview_window("controls").ok_or("controls window not found")?;
+    let controls_hwnd = controls.hwnd().map_err(|e| e.to_string())?.0 as isize;
+    if !show {
+        video::set_visible_without_focus(controls_hwnd, false);
+        return Ok(());
+    }
+    let main = app.get_webview_window("main").ok_or("main window not found")?;
+    let (pos, size, scale) = (
+        main.outer_position().map_err(|e| e.to_string())?,
+        main.outer_size().map_err(|e| e.to_string())?,
+        main.scale_factor().map_err(|e| e.to_string())?,
+    );
+    let px = |logical: f64| (logical * scale).round() as i32;
+    let width = px(1100.0).min(size.width as i32 - px(48.0)).max(px(400.0));
+    let height = px(52.0);
+    controls
+        .set_size(tauri::PhysicalSize::new(width as u32, height as u32))
+        .and_then(|_| {
+            controls.set_position(tauri::PhysicalPosition::new(
+                pos.x + (size.width as i32 - width) / 2,
+                pos.y + size.height as i32 - height - px(28.0),
+            ))
+        })
+        .map_err(|e| e.to_string())?;
+    video::set_visible_without_focus(controls_hwnd, true);
+    Ok(())
+}
+
+/// Hides the cursor over the video until the mouse next moves (fullscreen, controls hidden).
+#[tauri::command]
+fn set_video_cursor_hidden(hidden: bool) {
+    video::set_cursor_hidden(hidden);
+}
+
 /// Puts the app window itself in or out of fullscreen (mpv can't while embedded).
 #[tauri::command]
 fn set_window_fullscreen(app: AppHandle, on: bool) -> Result<(), String> {
@@ -524,6 +562,7 @@ fn main() {
             }
 
             let main_window = app.get_webview_window("main").ok_or("main window not found")?;
+            video::set_app(app.handle().clone());
             let video_window = video::create(main_window.hwnd()?.0 as isize);
 
             app.manage(AppState {
@@ -534,6 +573,20 @@ fn main() {
                 prefs: Arc::new(Mutex::new(PlayerPrefs::default())),
                 video_window,
             });
+
+            // the fullscreen control bar, created after the state above: building a window
+            // takes long enough that the main page would otherwise call commands too early.
+            // Owned by the main window, so it stays above it without floating over other apps.
+            tauri::WebviewWindowBuilder::new(app, "controls", tauri::WebviewUrl::App("controls.html".into()))
+                .title("AnimeCLI controls")
+                .parent(&main_window)?
+                .decorations(false)
+                .resizable(false)
+                .skip_taskbar(true)
+                .shadow(false)
+                .focused(false)
+                .visible(false)
+                .build()?;
             Ok(())
         })
         .on_window_event(|window, event| match event {
@@ -541,7 +594,7 @@ fn main() {
             // which brings it back once the size settles (see video::hide). The page's own
             // resize event isn't enough: going fullscreen can end with a Resized here
             // after the page has already re-laid itself out.
-            WindowEvent::Resized(_) => {
+            WindowEvent::Resized(_) if window.label() == "main" => {
                 video::hide(window.state::<AppState>().video_window);
                 let _ = window.emit("video-resize-hide", ());
             }
@@ -563,6 +616,8 @@ fn main() {
             set_start_fullscreen,
             set_player_fullscreen,
             set_window_fullscreen,
+            show_controls_overlay,
+            set_video_cursor_hidden,
             player_command,
             set_video_rect
         ])

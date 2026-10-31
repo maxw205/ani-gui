@@ -252,7 +252,7 @@ body.theater .detail { border-radius: 0; background: #000; }
 body.theater .player-area { flex: 1; padding: 0; display: flex; }
 body.theater .player-frame { width: 100%; border-radius: 0; display: flex; flex-direction: column; }
 body.theater .video-slot { flex: 1; aspect-ratio: auto; }
-/* fullscreen leaves no room beside the video, so mpv's own on-screen controls take over */
+/* in fullscreen the video fills the screen and the bar floats over it in its own window (controls.html) */
 body.theater .video-controls { display: none; }
 .banner {
   position: absolute;

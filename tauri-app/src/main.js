@@ -5,7 +5,7 @@
 import { facts, listMeta, lookup, nextAiring, plainDescription } from "./anilist.js";
 
 const { invoke } = window.__TAURI__.core;
-const { listen } = window.__TAURI__.event;
+const { listen, emitTo } = window.__TAURI__.event;
 
 const ANSI_RE = /\x1b\[[0-9;?]*[A-Za-z]|\x1b[78]/g;
 const PLAYING_RE = /Playing episode (.+?) of (.*?)\.\.\.\s*$/;
@@ -286,7 +286,51 @@ function renderControls() {
   if (typeof p.speed === "number" && [...el.vcSpeed.options].some((o) => Number(o.value) === p.speed)) el.vcSpeed.value = String(p.speed);
 
   for (const control of el.videoControls.querySelectorAll("button, input, select")) control.disabled = !state.playerOpen;
+  // the same state for the bar in the fullscreen controls window
+  emitTo("controls", "controls-state", { props: playerProps, enabled: state.playerOpen }).catch(() => {});
 }
+
+// ---------- fullscreen controls ----------
+
+// In fullscreen nothing can be drawn over the video, so the bar is in a small window of its
+// own (controls.html) floating above it. Like a normal player, it and the cursor show when
+// the mouse moves and hide after a few seconds of stillness, but stay up while the mouse is
+// on the bar or the video is paused.
+const OVERLAY_HIDE_MS = 2500;
+let overlayShown = false;
+let overlayHovered = false;
+let overlayTimer = 0;
+
+function showOverlay() {
+  if (!state.theater || !state.playerOpen) return;
+  if (!overlayShown) {
+    overlayShown = true;
+    invoke("show_controls_overlay", { show: true }).catch((err) => log(`[controls] ${err}`));
+    renderControls();
+  }
+  clearTimeout(overlayTimer);
+  overlayTimer = setTimeout(() => {
+    if (overlayHovered || playerProps.pause) showOverlay(); // check again later
+    else hideOverlay();
+  }, OVERLAY_HIDE_MS);
+}
+
+function hideOverlay() {
+  clearTimeout(overlayTimer);
+  // in fullscreen the cursor goes with the bar; the next mouse move brings both back
+  invoke("set_video_cursor_hidden", { hidden: state.theater }).catch(() => {});
+  if (!overlayShown) return;
+  overlayShown = false;
+  overlayHovered = false;
+  invoke("show_controls_overlay", { show: false }).catch((err) => log(`[controls] ${err}`));
+}
+
+listen("video-mouse", () => showOverlay());
+listen("controls-hover", ({ payload }) => {
+  overlayHovered = payload;
+  if (payload) showOverlay();
+});
+listen("controls-ready", () => renderControls());
 
 function togglePause() {
   setPlayerProperty("pause", !playerProps.pause);
@@ -311,7 +355,7 @@ function toggleSubs() {
   setPlayerProperty("sub-visibility", playerProps["sub-visibility"] === false);
 }
 
-/** mpv's built-in on-screen controller: hidden while the bar is showing, back in fullscreen. */
+/** mpv's built-in on-screen controller; the app's bar replaces it, in fullscreen too. */
 function setOscVisible(on) {
   playerCommand("script-message", "osc-visibility", on ? "auto" : "never", "no-osd");
 }
@@ -322,7 +366,9 @@ function setTheater(on) {
   state.theater = on;
   document.body.classList.toggle("theater", on);
   invoke("set_window_fullscreen", { on }).catch((err) => log(`[fullscreen] ${err}`));
-  if (state.playerOpen) setOscVisible(on);
+  // show the floating controls once the window is fullscreen, so they land on the right screen
+  if (on) setTimeout(showOverlay, 400);
+  else hideOverlay(); // also brings the cursor back, since theater is now off
   // the layout changes again once the window has resized
   requestAnimationFrame(() => syncVideo(true));
   setTimeout(() => syncVideo(true), 300);
@@ -646,7 +692,7 @@ listen("ani-player", ({ payload }) => {
   playerProps = {};
   if (payload.open) {
     state.playerLoading = false;
-    setOscVisible(state.theater);
+    setOscVisible(false);
     setStatus("Playing. Space to pause, ←/→ to skip, f or ⛶ for fullscreen (Esc to leave).");
   }
   log(`[player ${payload.open ? "opened" : "closed"}]`);
@@ -664,6 +710,7 @@ listen("ani-player-state", ({ payload }) => {
   if (!sessionFor(payload.session)) return;
   playerProps[payload.name] = payload.value;
   renderControls();
+  if (payload.name === "pause" && payload.value) showOverlay();
 });
 
 listen("ani-exit", ({ payload }) => {
