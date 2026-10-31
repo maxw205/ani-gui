@@ -1,3 +1,3 @@
-# the bridge runs under Git Bash; CRLF line endings would break it
-bridge/* text eol=lf
-electron-app/electron/bridge/* text eol=lf
+# the bridge scripts run under sh (Git Bash on Windows); CRLF line endings would break them
+electron/bridge/* text eol=lf
+extras/python-app/bridge/* text eol=lf

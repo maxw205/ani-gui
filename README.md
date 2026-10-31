@@ -1,42 +1,71 @@
 # AnimeCLI
 
-A desktop window for [ani-cli](https://github.com/pystardust/ani-cli). Search, pick an episode, and it plays in mpv.
-
-There are two versions: the original Python/tkinter app (this folder) and an Electron + React app in [`electron-app/`](electron-app/README.md), which plays episodes right in the window (no mpv), can upscale them with Anime4K and skips intros with [AniSkip](https://aniskip.com).
+A desktop app for watching anime through [ani-cli](https://github.com/pystardust/ani-cli), built with Electron and React: search, pick an episode, and it plays right in the window in a normal `<video>` element, with its own controls on top. No mpv. It can upscale with Anime4K and skips intros with [AniSkip](https://aniskip.com).
 
 ## Run it
 
-Double-click `AnimeCLI.bat`, or:
-
 ```
-pythonw anigui.py
+npm install
+npm start        # builds the interface, then opens the app
+npm run dev      # development: hot reload for the React side
 ```
 
-Needs ani-cli, mpv, fzf and Git for Windows (all via scoop) and Python 3 with tkinter. No pip packages.
+Needs Node.js and [ani-cli](https://github.com/pystardust/ani-cli) on PATH. mpv and fzf aren't used.
+
+- **Windows**: ani-cli and Git for Windows, e.g. `scoop install git ani-cli`. ani-cli runs in Git Bash.
+- **Linux / macOS**: ani-cli (from your package manager or its install script) with curl, sed and grep. ani-cli runs in `/bin/sh`. On Linux the upscaler needs WebGPU through Vulkan; if the GPU driver doesn't offer it, the plain video plays.
 
 ## Using it
 
-- **Search**: type a name and press Enter, then click a show on the left to list its episodes.
-- **Episodes**: click a number to play it. Watched episodes are green, the current one is purple. Long series are split into pages of 100.
-- **Player bar**: Previous / Replay / Next switch episodes (the old mpv window closes), Stop closes the player. With **Autoplay next** on, closing mpv starts the next episode.
-- **History**: ani-cli's watch history. Click a show to jump straight to the episode after the one you last watched.
-- **Sub / Dub** and **Quality** apply to the next episode you start.
-- **Show log**: ani-cli's own output, useful when something fails.
-
-## Upscaling shaders
-
-mpv's config (`~\scoop\persist\mpv\portable_config`) has Anime4K and [ArtCNN](https://github.com/Artoriuz/ArtCNN) v1.6.2 shaders. Press these while an episode plays:
-
-| Key | Shaders |
-|---|---|
-| Ctrl+1 … Ctrl+6 | Anime4K modes A, B, C, A+A, B+B, C+A |
-| Ctrl+7 | ArtCNN C4F32 |
-| Ctrl+8 | ArtCNN C4F32 + adaptive sharpen |
-| Ctrl+9 | ArtCNN C4F32 DS (denoise + sharpen) |
-| Ctrl+0 | Off |
-
-The upscalers only kick in when the video is drawn bigger than the stream (ArtCNN needs 1.3×), so on a 1080p screen pick Quality 720 and go fullscreen. Shift+I then 2 in mpv lists the shader passes that are running. Shader lists in input.conf must be separated with `;` on Windows, not `:`.
+- **Search**, pick a show, click an episode. **History** lists what you've watched; click one to jump to the next episode.
+- **Player**: the controls and the episode's title show when the mouse moves and hide, with the cursor, after a few seconds while it plays. Space or K pause, ←/→ skip 5 s, ↑/↓ volume, M mute, C subtitles, F (or double-click) fullscreen. While an episode plays, its episodes and the show's details are below the player.
+- **Speed**: click the speed in the control bar for a slider from 0.1× to 5× and 0.5× / 1× / 1.5× / 2× buttons.
+- **Captions**: the gear next to CC sets their size, colour (presets or RGB sliders), background, height, outline, font and bold. Remembered between sessions.
+- **Skip intro**: a button to skip openings, endings and recaps while they play, and **Auto-skip intros** at the bottom to skip them without asking (see [Skipping intros](#skipping-intros-aniskip)).
+- **Sub / Dub** and **Quality**: changing them mid-episode loads the same episode again that way, from the same point.
+- **Next / Previous / Replay / Autoplay** in the bar at the bottom; **Show log** shows ani-cli's output.
 
 ## How it works
 
-The app doesn't scrape anything itself. It runs ani-cli with `ANI_CLI_MENU` pointed at `bridge/anigui-menu`, so whenever ani-cli would show a menu, the bridge hands the prompt and options to the window through a temp folder and waits for the click. Updating ani-cli (`ani-cli -U` or `scoop update ani-cli`) updates the app too.
+| Path | What it does |
+|---|---|
+| `electron/main.cjs` | The window, and wiring for the parts below |
+| `electron/anicli.cjs` | Runs ani-cli and relays its menus, output and streams to the page |
+| `electron/stream.cjs` | The `anistream://` protocol: fetches the stream with the referrer it needs |
+| `electron/preload.cjs` | The only API the page has (`window.anicli`) |
+| `electron/bridge/` | Scripts ani-cli runs: its menu (`anigui-menu`), its "player" (`anigui-webmpv`) and a `rofi` stand-in (below) |
+| `src/store.js` | App state and the ani-cli logic (what to answer, what to show) |
+| `src/components/` | The React UI; `Player.jsx` is the video and its controls |
+| `src/anilist.js` | Cover art and show details from AniList |
+| `src/aniskip.js` | Opening, ending and recap times from AniSkip |
+
+**ani-cli does the finding.** It's run with `ANI_CLI_MENU=anigui-menu`: whenever it would show a menu, that script writes the prompt and options to a temp folder and waits for the page's answer. Its player is `anigui-webmpv`, a stand-in that writes the stream URL, referrer, subtitles and title to the same folder instead of playing anything. (The name has "mpv" in it only because ani-cli passes the referrer and subtitles to players whose name contains "mpv".) Nothing is scraped by the app, so updating ani-cli keeps it working. When ani-cli isn't started from a terminal it switches to rofi or dmenu if either is installed, ignoring `ANI_CLI_MENU`; the bridge's `rofi` comes first on PATH, so ani-cli picks it and the menus still reach the page.
+
+**The page plays it.** The stream hosts only answer requests that carry the right referrer, which a page can't set. So the page asks for `anistream://proxy/?u=<url>`; the main process fetches it with the referrer and passes it back, rewriting HLS playlists so their segments and subtitles go through the proxy too. Only hosts ani-cli handed over are fetched. hls.js plays the result. Nothing is re-encoded, so quality is the original, playback starts as soon as ani-cli has the link, and you can seek anywhere straight away.
+
+When the video ends, the page tells the stand-in player to exit, so ani-cli shows its after-playback menu and Next / Autoplay / history work as with any player.
+
+## Upscaler (Anime4K)
+
+The **Upscaler** menu in the player's control bar runs [Anime4K](https://github.com/bloc97/Anime4K) on the GPU through WebGPU, using the presets from [Anime4K-WebGPU](https://github.com/Anime4KWebBoost/Anime4K-WebGPU) (MIT). Mode A suits 1080p sources, B 720p, C 480p; A+A, B+B and C+A are stronger and heavier.
+
+`src/upscaler.js` copies each frame the `<video>` presents into a GPU texture, runs the chosen preset and draws the result into a `<canvas>` over the video, at the canvas's real pixel size. The preset always upscales to the screen's size, and the player in the window is drawn from that scaled down: building a preset compiles its shaders, which takes a moment, so this way resizing the window or going fullscreen never rebuilds it. The video keeps decoding and playing the sound underneath (invisible, but still taking the clicks); seeking is unaffected and nothing is re-encoded. The package's own `render()` helper can't be stopped and fixes its sizes once, so the presets are driven directly. Subtitles are always drawn by the player itself, above the canvas (the browser would draw them as part of the video, which is invisible while upscaling, and its own captions can hardly be styled). If WebGPU isn't available or fails, it falls back to the plain video. The upscaler code (mostly the networks' weights, ~3.5 MB) loads only when it's first turned on.
+
+## Skipping intros (AniSkip)
+
+Opening, ending and recap times come from [AniSkip](https://aniskip.com), the community database behind [ani-skip](https://github.com/synacktraa/ani-skip) (which ani-cli's `--skip` uses). ani-skip itself turns those times into an mpv script, which doesn't apply to a page's `<video>`, so the app asks AniSkip's API directly (`src/aniskip.js`):
+
+- AniSkip knows shows by their MyAnimeList id. The app already matches each show on AniList for its cover art, and AniList gives the MyAnimeList id (`idMal`) too, so there's no extra search.
+- Once the video's length is known, it asks `api.aniskip.com/v2/skip-times/<MAL id>/<episode>` for openings, endings, recaps and "mixed" openings/endings (ones played over story scenes). Submitted timings are tied to the cut of the episode they were made on, so of each kind the one whose episode length is closest to the playing video is used.
+- While one of them plays, **Skip intro / ending / recap** shows over the video, and they're marked in yellow on the seek bar. With **Auto-skip intros** on, each is jumped over once by itself; seeking back into one plays it, with the button.
+
+Nothing shows when the show didn't match on AniList (it then has no cover art either), when nobody has submitted timings for that episode yet, for half episodes (12.5), or when the streaming site numbers a season's episodes differently from MyAnimeList.
+
+## Extras
+
+[`extras/python-app/`](extras/python-app/README.md) is the original version: a Python/tkinter window that runs ani-cli the same way but plays in mpv, with mpv's Anime4K and ArtCNN shaders.
+
+## Not done yet
+
+- ArtCNN (the GLSL shaders are written for mpv/libplacebo and would need porting to WebGPU).
+- Packaging into an installer (e.g. electron-builder).
