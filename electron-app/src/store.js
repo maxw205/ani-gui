@@ -13,10 +13,17 @@ const LOG_LINES = 400;
 
 // ---------- the store ----------
 
+/**
+ * Caption look: size (× normal), text colour, background opacity, height above the bottom (% of
+ * the video), outline thickness (0-10), font (a key of the player's CAPTION_FONTS) and bold.
+ */
+export const CAPTION_DEFAULTS = { size: 1, color: "#ffffff", background: 0.6, lift: 7, outline: 4, font: "app", bold: false };
+
 function loadSettings() {
-  const defaults = { mode: "sub", quality: "best", autoplay: false, upscaler: "off" };
+  const defaults = { mode: "sub", quality: "best", autoplay: false, upscaler: "off", captions: CAPTION_DEFAULTS };
   try {
-    return { ...defaults, ...JSON.parse(localStorage.getItem("settings") || "{}") };
+    const saved = JSON.parse(localStorage.getItem("settings") || "{}");
+    return { ...defaults, ...saved, captions: { ...defaults.captions, ...saved.captions } };
   } catch {
     return defaults;
   }
@@ -134,6 +141,8 @@ let nextSessionId = 1;
 let autoTitle = null;
 let continueAfter = null;
 let autoEpisode = null;
+let playbackTime = 0; // where the page's video is, reported by the player
+let resumeAt = null; // where the next stream should start, after a Sub/Dub or Quality switch
 
 const settingsKey = () => `${state.settings.mode}|${state.settings.quality}`;
 
@@ -274,7 +283,8 @@ window.anicli.on("ani:menu", ({ session: id, prompt, options }) => {
 window.anicli.on("ani:stream", (payload) => {
   if (!sessionFor(payload.session)) return;
   log(`[stream] ${payload.title}`);
-  set({ stream: payload, loadingVideo: false, nowPlaying: `▶  ${payload.title || state.animeTitle}` });
+  set({ stream: { ...payload, startAt: resumeAt }, loadingVideo: false, nowPlaying: `▶  ${payload.title || state.animeTitle}` });
+  resumeAt = null;
   setStatus("Loading the video…");
 });
 
@@ -363,6 +373,7 @@ function openAnime(index) {
 
 export function play(ep) {
   if (state.animeNo === null) return;
+  resumeAt = null;
   set({
     currentEp: ep,
     page: pageOf(ep),
@@ -404,12 +415,24 @@ export function setPage(page) {
 }
 
 export function setSetting(key, value) {
+  const before = state.settings[key];
   set((s) => ({ settings: { ...s.settings, [key]: value } }));
   try {
     localStorage.setItem("settings", JSON.stringify(state.settings));
   } catch {
     // storage unavailable; settings just won't be remembered
   }
+  // Sub/Dub or Quality changed mid-episode: load the episode again that way, from the same point
+  if ((key === "mode" || key === "quality") && value !== before && state.currentEp && (state.stream || state.loadingVideo)) {
+    const at = state.stream ? playbackTime : null;
+    replay();
+    resumeAt = at;
+  }
+}
+
+/** The player reports its position, so a Sub/Dub switch can carry on from it. */
+export function videoTime(seconds) {
+  playbackTime = seconds;
 }
 
 /** The episode playing in the page has ended: ani-cli moves on to its after-playback menu. */

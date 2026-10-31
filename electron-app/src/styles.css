@@ -172,28 +172,83 @@ select option, select optgroup { background: var(--panel); color: var(--text); }
 .player-frame.fullscreen { position: fixed; inset: 0; z-index: 100; width: auto; aspect-ratio: auto; border-radius: 0; }
 .player-frame.idle { cursor: none; }
 .video { display: block; width: 100%; height: 100%; background: #000; }
-.video::cue { background: rgb(0 0 0 / 0.55); font-size: 1.05em; }
 /* Anime4K: the canvas shows the upscaled frames; the video stays rendered (it has to, to keep
    presenting frames) but invisible underneath, and still takes the clicks */
 .upscale-canvas { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; display: none; }
 .player-frame.upscaled .upscale-canvas { display: block; }
 .player-frame.upscaled .video { opacity: 0; }
 .upscaler { width: 116px; }
-/* subtitles drawn by the player while upscaling, sized to the player like the browser's own */
+/* subtitles, drawn by the player and sized to it; --cap-* come from the caption settings */
 .player-frame { container-type: size; }
 .captions {
   position: absolute;
-  inset: auto 4% 7% 4%;
+  inset: auto 4% calc(var(--cap-lift, 7) * 1%) 4%;
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 2px;
   pointer-events: none;
-  font-size: clamp(14px, 4.6cqh, 48px);
+  font-size: calc(clamp(14px, 4.6cqh, 48px) * var(--cap-size, 1));
   line-height: 1.25;
   text-align: center;
+  color: var(--cap-color, #fff);
+  font-family: var(--cap-font, inherit);
+  font-weight: var(--cap-weight, 400);
 }
-.captions span { padding: 1px 8px; background: rgb(0 0 0 / 0.6); border-radius: 3px; white-space: pre-line; }
+.captions span {
+  padding: 1px 8px;
+  background: rgb(0 0 0 / var(--cap-bg, 0.6));
+  border-radius: 3px;
+  white-space: pre-line;
+  /* the outline: a stroke drawn behind the letters (paint-order), so a thick one doesn't eat into
+     them; plus a faint shadow to soften its edge */
+  -webkit-text-stroke: var(--cap-outline, 0.1em) #000;
+  paint-order: stroke fill;
+  text-shadow: 0 0 2px rgb(0 0 0 / 0.6);
+}
+
+/* caption settings menu, above the control bar */
+.cap-menu {
+  position: absolute;
+  right: 12px;
+  bottom: calc(100% - 14px);
+  display: grid;
+  gap: 8px;
+  width: 280px;
+  padding: 10px 12px;
+  background: rgb(20 21 28 / 0.95);
+  border: 1px solid rgb(255 255 255 / 0.12);
+  border-radius: 8px;
+  font-size: 13px;
+}
+.cap-row { display: grid; grid-template-columns: 78px 1fr 40px; align-items: center; gap: 10px; color: #c9cad6; }
+.cap-slider { width: 100%; height: 18px; }
+.controls .cap-slider::-webkit-slider-runnable-track {
+  border-radius: 2px;
+  background: linear-gradient(to right, var(--accent) var(--fill), rgb(255 255 255 / 0.25) var(--fill));
+}
+.cap-value { text-align: right; color: #e6e7ef; font-variant-numeric: tabular-nums; }
+.swatches { grid-column: 2 / 4; display: flex; gap: 8px; }
+.swatch { width: 20px; height: 20px; padding: 0; border-radius: 50%; box-shadow: 0 0 0 1px rgb(255 255 255 / 0.3); }
+.swatch.on { box-shadow: 0 0 0 2px #15161c, 0 0 0 4px var(--accent); }
+.swatch.custom { background: conic-gradient(red, yellow, lime, cyan, blue, magenta, red); }
+.cap-colors {
+  display: grid;
+  gap: 8px;
+  margin: -2px 0 2px;
+  padding: 8px 10px;
+  background: rgb(255 255 255 / 0.05);
+  border-radius: 6px;
+}
+.cap-colors .cap-row { grid-template-columns: 58px 1fr 34px; }
+.controls .cap-slider.rgb::-webkit-slider-runnable-track { height: 6px; border-radius: 3px; background: var(--track); }
+.controls .cap-slider.rgb::-webkit-slider-thumb { margin-top: -3.5px; box-shadow: 0 0 0 1px rgb(0 0 0 / 0.6); }
+.cap-preview { display: flex; align-items: center; gap: 8px; color: #c9cad6; }
+.cap-preview .swatch { display: inline-block; }
+.cap-reset { justify-self: end; padding: 3px 10px; font-size: 12.5px; }
+.cap-font { min-width: 0; padding: 3px 6px; font-size: 12.5px; background: rgb(0 0 0 / 0.35); border-color: rgb(255 255 255 / 0.18); }
+.cap-bold { padding: 3px 0; font-weight: 700; background: rgb(255 255 255 / 0.08); color: #c9cad6; }
+.cap-bold.on { background: var(--accent); color: #fff; }
 .video-message {
   position: absolute;
   inset: 0;
@@ -211,6 +266,22 @@ select option, select optgroup { background: var(--panel); color: var(--text); }
   transition: opacity 0.25s;
 }
 .controls.hidden { opacity: 0; pointer-events: none; }
+/* what's playing, along the top; shows and hides with the controls */
+.title-bar {
+  position: absolute;
+  inset: 0 0 auto 0;
+  padding: 10px 16px 28px;
+  background: linear-gradient(to bottom, rgb(0 0 0 / 0.7), transparent);
+  color: #fff;
+  font-size: clamp(14px, 3.2cqh, 22px);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  pointer-events: none;
+  transition: opacity 0.25s;
+}
+.title-bar.hidden { opacity: 0; }
 .controls .row { display: flex; align-items: center; gap: 4px; }
 .controls .spacer { flex: 1; }
 .controls .time { padding: 0 8px; color: #d6d7e0; font-size: 12.5px; font-variant-numeric: tabular-nums; white-space: nowrap; }
@@ -242,7 +313,8 @@ select option, select optgroup { background: var(--panel); color: var(--text); }
 .seek .played { background: var(--accent); }
 .controls input[type="range"] { position: relative; margin: 0; background: transparent; appearance: none; cursor: pointer; }
 .seek input[type="range"] { width: 100%; height: 16px; }
-.controls input[type="range"]::-webkit-slider-runnable-track { height: 4px; background: transparent; }
+/* :where() keeps this weak, so a slider's own track (.volume, .cap-slider) wins over it */
+.controls :where(input[type="range"])::-webkit-slider-runnable-track { height: 4px; background: transparent; }
 .controls input[type="range"]::-webkit-slider-thumb {
   appearance: none;
   width: 13px;

@@ -1,6 +1,6 @@
 import Hls from "hls.js";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { log, setSetting, setStatus, useStore, videoEnded, videoStarted } from "../store.js";
+import { CAPTION_DEFAULTS, log, setSetting, setStatus, useStore, videoEnded, videoStarted, videoTime } from "../store.js";
 import { isTyping } from "../util.js";
 
 // menu labels; the upscaler code itself (src/upscaler.js) only loads once it's turned on
@@ -8,6 +8,30 @@ const UPSCALER_LABELS = { off: "Upscaler off", a: "Anime4K A", b: "Anime4K B", c
 
 const HIDE_AFTER_MS = 2500;
 const SPEEDS = [0.75, 1, 1.25, 1.5, 2];
+// the caption settings menu: [setting, label, min, max, step, how to show the value]
+const percent = (value) => `${Math.round(value * 100)}%`;
+const CAPTION_SLIDERS = [
+  ["size", "Size", 0.5, 2.5, 0.05, percent],
+  ["background", "Background", 0, 1, 0.05, percent],
+  ["lift", "Height", 0, 80, 1, (value) => `${value}%`],
+  ["outline", "Outline", 0, 10, 0.5, String],
+];
+// fonts already on the computer (Windows names first, then Linux/macOS stand-ins): key -> [name, CSS]
+const CAPTION_FONTS = {
+  app: ["App font", '"Segoe UI", system-ui, sans-serif'],
+  arial: ["Arial", 'Arial, "Liberation Sans", Helvetica, sans-serif'],
+  verdana: ["Verdana", 'Verdana, "DejaVu Sans", sans-serif'],
+  trebuchet: ["Trebuchet", '"Trebuchet MS", "Ubuntu", sans-serif'],
+  georgia: ["Georgia", 'Georgia, "DejaVu Serif", serif'],
+  mono: ["Monospace", 'Consolas, "DejaVu Sans Mono", monospace'],
+};
+// "#rrggbb" <-> [r, g, b], for the custom colour sliders
+const toRgb = (hex) => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) || 0);
+const toHex = (rgb) => `#${rgb.map((c) => c.toString(16).padStart(2, "0")).join("")}`;
+const CHANNELS = ["Red", "Green", "Blue"];
+// outline thickness 0-10 -> stroke width; half of it shows, as it's drawn behind the letters
+const outlineWidth = (outline) => `${outline * 0.025}em`;
+const CAPTION_COLORS = [["#ffffff", "White"], ["#ffe14d", "Yellow"], ["#6ee7ff", "Cyan"], ["#8cff8c", "Green"], ["#ff9ecb", "Pink"]];
 
 function formatTime(seconds) {
   const t = Number.isFinite(seconds) && seconds > 0 ? Math.floor(seconds) : 0;
@@ -23,7 +47,7 @@ function formatTime(seconds) {
  * the cursor hide after a few seconds without the mouse moving while it plays.
  */
 export default function Player() {
-  const { stream, loadingVideo, settings } = useStore();
+  const { stream, loadingVideo, settings, animeTitle, currentEp } = useStore();
   const frame = useRef(null);
   const video = useRef(null);
   const canvas = useRef(null);
@@ -42,7 +66,8 @@ export default function Player() {
     const el = video.current;
     if (!stream || !el) return undefined;
     // workers would need blob: scripts, which the page's security policy doesn't allow
-    const hls = new Hls({ enableWorker: false });
+    // startAt: carrying on after a Sub/Dub or Quality switch
+    const hls = new Hls({ enableWorker: false, startPosition: stream.startAt ?? -1 });
     hls.on(Hls.Events.ERROR, (_e, data) => {
       log(`[hls] ${data.type} ${data.details}${data.fatal ? " (fatal)" : ""}`);
       if (!data.fatal) return;
@@ -110,24 +135,41 @@ export default function Player() {
     upscaler.current?.then((u) => u.destroy()).catch(() => {});
   }, []);
 
-  // The subtitle track follows the CC button. The browser draws subtitles as part of the
-  // video, which is invisible while upscaling, so then the track runs hidden and its
-  // current lines are drawn above the canvas instead.
+  // The subtitle track runs hidden and the player draws its current lines itself: the browser's
+  // own captions can hardly be styled, and they'd be invisible while upscaling, being drawn as
+  // part of the (then invisible) video.
   const [captions, setCaptions] = useState([]);
   useEffect(() => {
     const track = video.current?.textTracks[0];
     if (!track) return undefined;
-    track.mode = subsOn ? (upscaling ? "hidden" : "showing") : "hidden";
+    track.mode = "hidden";
     const onCueChange = () => setCaptions([...(track.activeCues ?? [])].map((cue) => cue.text.replace(/<[^>]+>/g, "")));
     track.addEventListener("cuechange", onCueChange);
     onCueChange();
     return () => track.removeEventListener("cuechange", onCueChange);
-  }, [subsOn, upscaling, stream?.subtitles]);
+  }, [stream?.subtitles]);
+
+  // the caption settings menu, closed by clicking anywhere else
+  const [capMenu, setCapMenu] = useState(false);
+  const [colorMenu, setColorMenu] = useState(false); // its custom colour sliders
+  const cap = settings.captions;
+  const rgb = toRgb(cap.color);
+  const customColor = !CAPTION_COLORS.some(([color]) => color === cap.color);
+  const setCaption = (key, value) => setSetting("captions", { ...cap, [key]: value });
+  useEffect(() => {
+    if (!capMenu) return undefined;
+    const onDown = (e) => {
+      if (!e.target.closest(".cap-menu, .cap-button")) setCapMenu(false);
+    };
+    document.addEventListener("pointerdown", onDown);
+    return () => document.removeEventListener("pointerdown", onDown);
+  }, [capMenu]);
 
   const read = useCallback(() => {
     const el = video.current;
     if (!el) return;
     const buffered = el.buffered.length ? el.buffered.end(el.buffered.length - 1) : 0;
+    videoTime(el.currentTime);
     setV({ paused: el.paused, time: el.currentTime, duration: el.duration || 0, buffered, volume: el.volume, muted: el.muted, speed: el.playbackRate });
   }, []);
 
@@ -181,6 +223,11 @@ export default function Player() {
   // keyboard shortcuts while a video is up
   useEffect(() => {
     const onKey = (e) => {
+      // Esc closes the caption menu first, even with one of its dropdowns focused
+      if (e.key === "Escape" && capMenu) {
+        setCapMenu(false);
+        return;
+      }
       if (e.ctrlKey || e.altKey || isTyping() || !video.current) return;
       const actions = {
         Escape: () => fullscreenRef.current && toggleFullscreen(),
@@ -203,14 +250,14 @@ export default function Player() {
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [poke, toggleFullscreen]);
+  }, [poke, toggleFullscreen, capMenu]);
 
   const duration = v.duration;
   const shownTime = seekDrag !== null ? seekDrag * duration : v.time;
   const played = duration ? (shownTime / duration) * 100 : 0;
   const bufferedPct = duration ? Math.min(100, (v.buffered / duration) * 100) : 0;
   const muted = v.muted || v.volume === 0;
-  const hidden = !controlsShown && !v.paused;
+  const hidden = !controlsShown && !v.paused && !capMenu;
 
   return (
     <div className="player-area">
@@ -227,13 +274,85 @@ export default function Player() {
         </video>
         {/* the upscaled picture; clicks pass through to the video */}
         <canvas ref={canvas} className="upscale-canvas" />
-        {upscaling && subsOn && captions.length > 0 && (
-          <div className="captions">{captions.map((line, i) => <span key={i}>{line}</span>)}</div>
+        {subsOn && captions.length > 0 && (
+          <div className="captions"
+            style={{
+              "--cap-size": cap.size,
+              "--cap-color": cap.color,
+              "--cap-bg": cap.background,
+              "--cap-lift": cap.lift,
+              "--cap-outline": outlineWidth(cap.outline),
+              "--cap-font": (CAPTION_FONTS[cap.font] ?? CAPTION_FONTS.app)[1],
+              "--cap-weight": cap.bold ? 700 : 400,
+            }}>
+            {captions.map((line, i) => <span key={i}>{line}</span>)}
+          </div>
         )}
 
         {(!stream || buffering) && <div className="video-message">{loadingVideo || !stream ? "Loading video…" : "Buffering…"}</div>}
 
+        <div className={`title-bar ${hidden ? "hidden" : ""}`}>
+          {stream?.title || [animeTitle, currentEp && `Episode ${currentEp}`].filter(Boolean).join("  —  ")}
+        </div>
+
         <div className={`controls ${hidden ? "hidden" : ""}`} onMouseMove={poke}>
+          {capMenu && (
+            <div className="cap-menu" role="dialog" aria-label="Caption settings">
+              {CAPTION_SLIDERS.map(([key, label, min, max, step, show]) => (
+                <label key={key} className="cap-row">
+                  <span>{label}</span>
+                  <input type="range" className="cap-slider" min={min} max={max} step={step} value={cap[key]}
+                    style={{ "--fill": `${((cap[key] - min) / (max - min)) * 100}%` }}
+                    onChange={(e) => setCaption(key, Number(e.target.value))} />
+                  <span className="cap-value">{show(cap[key])}</span>
+                </label>
+              ))}
+              <div className="cap-row">
+                <span>Font</span>
+                <select className="cap-font" aria-label="Caption font" value={cap.font} onChange={(e) => setCaption("font", e.target.value)}>
+                  {Object.entries(CAPTION_FONTS).map(([key, [name, css]]) => (
+                    <option key={key} value={key} style={{ fontFamily: css }}>{name}</option>
+                  ))}
+                </select>
+                <button type="button" className={`cap-bold ${cap.bold ? "on" : ""}`} aria-label="Bold" title="Bold"
+                  aria-pressed={cap.bold} onClick={() => setCaption("bold", !cap.bold)}>B</button>
+              </div>
+              <div className="cap-row">
+                <span>Colour</span>
+                <div className="swatches">
+                  {CAPTION_COLORS.map(([color, name]) => (
+                    <button key={color} type="button" className={`swatch ${cap.color === color ? "on" : ""}`}
+                      style={{ background: color }} aria-label={name} title={name} aria-pressed={cap.color === color}
+                      onClick={() => setCaption("color", color)} />
+                  ))}
+                  <button type="button" className={`swatch custom ${customColor ? "on" : ""}`} aria-label="Custom colour"
+                    title="Custom colour" aria-expanded={colorMenu} onClick={() => setColorMenu(!colorMenu)} />
+                </div>
+              </div>
+              {colorMenu && (
+                <div className="cap-colors">
+                  {CHANNELS.map((name, i) => {
+                    // the track shows the colour each point of the slider would give
+                    const at = (value) => `rgb(${rgb.map((c, j) => (j === i ? value : c)).join(" ")})`;
+                    return (
+                      <label key={name} className="cap-row">
+                        <span>{name}</span>
+                        <input type="range" className="cap-slider rgb" min="0" max="255" step="1" value={rgb[i]}
+                          style={{ "--track": `linear-gradient(to right, ${at(0)}, ${at(255)})` }}
+                          onChange={(e) => setCaption("color", toHex(rgb.map((c, j) => (j === i ? Number(e.target.value) : c))))} />
+                        <span className="cap-value">{rgb[i]}</span>
+                      </label>
+                    );
+                  })}
+                  <div className="cap-preview">
+                    <span className="swatch" style={{ background: cap.color }} />
+                    <code>{cap.color}</code>
+                  </div>
+                </div>
+              )}
+              <button type="button" className="ghost cap-reset" onClick={() => setSetting("captions", CAPTION_DEFAULTS)}>Reset</button>
+            </div>
+          )}
           <div className="seek">
             <div className="track"><div className="buffered" style={{ width: `${bufferedPct}%` }} /><div className="played" style={{ width: `${played}%` }} /></div>
             <input type="range" min="0" max="1000" step="1" aria-label="Seek" disabled={!stream}
@@ -275,6 +394,10 @@ export default function Player() {
             </select>
             <button type="button" className={`icon cc ${subsOn ? "" : "off"}`} aria-pressed={subsOn} title="Subtitles (c)"
               disabled={!stream?.subtitles} onClick={() => setSubsOn(!subsOn)}>CC</button>
+            <button type="button" className="icon cap-button" aria-label="Caption settings" title="Caption settings"
+              aria-expanded={capMenu} onClick={() => setCapMenu(!capMenu)}>
+              <svg viewBox="0 0 24 24" className="stroke"><circle cx="12" cy="12" r="3" /><path d="M12 3v2.5M12 18.5V21M3 12h2.5M18.5 12H21M5.6 5.6l1.8 1.8M16.6 16.6l1.8 1.8M5.6 18.4l1.8-1.8M16.6 7.4l1.8-1.8" /></svg>
+            </button>
             <button type="button" className="icon" aria-label={fullscreen ? "Leave fullscreen" : "Fullscreen"} title="Fullscreen (f, or double-click the video)" onClick={toggleFullscreen}>
               {fullscreen
                 ? <svg viewBox="0 0 24 24" className="stroke"><path d="M9 4v5H4M15 4v5h5M20 15h-5v5M4 15h5v5" /></svg>
